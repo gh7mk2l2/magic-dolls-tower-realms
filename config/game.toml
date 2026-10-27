@@ -1,0 +1,190 @@
+# 《魔法玩偶：塔域战争》数值配置表
+# 服务端启动时加载（路径可用环境变量 GAME_CONFIG 覆盖）；单机 WASM 模拟内置同一份文件。
+# 时间单位均为秒，距离单位为世界像素，tick 频率固定 20Hz。
+
+[world]
+width = 3200.0
+height = 1800.0
+grid = 64                    # 流场网格边长（64x64）
+match_seconds = 900          # 常规时限：15 分钟
+respawn_seconds = 3          # 死亡后复活倒计时（"立即复活"可设为 0）
+ai_fill_to = 2               # 每队人数不足时由 AI 魔法玩偶补足到该数量
+max_team_size = 4
+
+[base]
+hp = 4200.0
+radius = 90.0
+offset_x = 180.0             # 距离各自地图边缘
+damage = 140.0               # 基地防御魔晶：保护出生点，防止复活被蹲
+range = 400.0
+attack_seconds = 1.0
+
+[tower]
+hp = 2400.0
+radius = 52.0
+damage = 85.0
+range = 310.0
+attack_seconds = 1.2
+offset_x = 720.0             # 距离各自地图边缘
+lane_offset_y = 470.0        # 上下两座塔距地图中线的偏移
+
+[poison]                     # 魔力辐射毒区
+radius = 250.0
+dps = 32.0                   # 每秒结算一次
+hurts_allies = false         # 只伤害敌方魔法玩偶
+hurts_minions = false
+
+[wave]                       # 变异魔兽兵波
+interval_seconds = 30
+count_per_tower = 3
+first_wave_seconds = 2
+aggro_range = 220.0          # 发现敌人后脱离流场主动接战
+hp = 180.0
+damage = 24.0
+speed = 95.0
+radius = 17.0
+range = 45.0
+attack_seconds = 1.0
+# 波次成长：倍率 = min(1 + 波次 * growth, max_multiplier)
+hp_growth = 0.09
+damage_growth = 0.07
+speed_growth = 0.018
+max_multiplier = 3.0
+# 可选：显式波次曲线（第 n 项为第 n 波的生命倍率），填写后覆盖 hp_growth。
+hp_curve = []
+
+[sudden_death]               # 超时死斗：超级双头变异魔兽
+hp = 18000.0
+damage = 360.0
+speed = 130.0
+radius = 55.0
+range = 110.0
+attack_seconds = 0.8
+per_tower = 1                # 每座存活魔法塔孕育的数量（无塔时从基地前出发）
+respawn_seconds = 45         # 死斗中被击杀后重新孕育
+max_seconds = 240            # 死斗最长时长，超时按基地剩余血量百分比判胜（相同为平局）
+base_decay_per_second = 0.0  # 死斗期间基地每秒额外流失（0 关闭）
+
+[hero]
+hp = 720.0
+speed = 255.0
+radius = 24.0
+attack_damage = 52.0
+attack_range = 270.0
+attack_seconds = 0.65
+ai_aggro_range = 900.0
+
+# ---- 魔法玩偶与技能 ----
+# effect 可选：damage（范围伤害）、stun（范围伤害+眩晕）、slow（范围伤害+减速）、
+#             dash（向瞄准方向位移）、heal（范围治疗友方，amount 为最大生命比例）、
+#             nova（以自身为中心的范围伤害）
+# 每个英雄 3 个技能，依次绑定 Q / E / R。
+
+[[heroes]]
+kind = "Arcanist"
+name = "星语术士"
+hp = 680.0
+speed = 250.0
+attack_damage = 56.0
+attack_range = 290.0
+skills = [
+  { key = "Q", name = "奥术冲击", effect = "damage", cooldown_seconds = 4.0, damage = 145.0, range = 460.0, radius = 95.0 },
+  { key = "E", name = "星辉禁锢", effect = "stun", cooldown_seconds = 9.0, damage = 60.0, range = 420.0, radius = 110.0, duration_seconds = 1.2 },
+  { key = "R", name = "终焉星爆", effect = "nova", cooldown_seconds = 18.0, damage = 260.0, range = 0.0, radius = 260.0 },
+]
+
+[[heroes]]
+kind = "Ranger"
+name = "月影游侠"
+hp = 640.0
+speed = 275.0
+attack_damage = 50.0
+attack_range = 330.0
+skills = [
+  { key = "Q", name = "流星箭雨", effect = "damage", cooldown_seconds = 5.0, damage = 120.0, range = 560.0, radius = 120.0 },
+  { key = "E", name = "月影疾步", effect = "dash", cooldown_seconds = 6.0, damage = 0.0, range = 240.0, radius = 0.0 },
+  { key = "R", name = "寒霜之矢", effect = "slow", cooldown_seconds = 12.0, damage = 150.0, range = 620.0, radius = 140.0, duration_seconds = 2.5, amount = 0.45 },
+]
+
+[[heroes]]
+kind = "Guardian"
+name = "晨曦守卫"
+hp = 900.0
+speed = 235.0
+attack_damage = 46.0
+attack_range = 200.0
+skills = [
+  { key = "Q", name = "守护震荡", effect = "nova", cooldown_seconds = 6.0, damage = 105.0, range = 0.0, radius = 170.0 },
+  { key = "E", name = "盾击冲锋", effect = "dash", cooldown_seconds = 8.0, damage = 0.0, range = 200.0, radius = 0.0 },
+  { key = "R", name = "生命回响", effect = "heal", cooldown_seconds = 14.0, damage = 0.0, range = 0.0, radius = 260.0, amount = 0.3 },
+]
+
+[[heroes]]
+kind = "Assassin"
+name = "影刃刺客"
+hp = 600.0
+speed = 290.0
+attack_damage = 62.0
+attack_range = 170.0
+skills = [
+  { key = "Q", name = "影袭突进", effect = "dash", cooldown_seconds = 6.0, damage = 110.0, range = 300.0, radius = 110.0 },
+  { key = "E", name = "淬毒双刃", effect = "slow", cooldown_seconds = 7.0, damage = 95.0, range = 230.0, radius = 95.0, duration_seconds = 2.0, amount = 0.4 },
+  { key = "R", name = "千刃乱舞", effect = "nova", cooldown_seconds = 16.0, damage = 300.0, range = 0.0, radius = 180.0 },
+]
+
+[[heroes]]
+kind = "Priestess"
+name = "花语祭司"
+hp = 620.0
+speed = 255.0
+attack_damage = 44.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "荆棘缠绕", effect = "stun", cooldown_seconds = 8.0, damage = 70.0, range = 450.0, radius = 100.0, duration_seconds = 1.0 },
+  { key = "E", name = "花露愈合", effect = "heal", cooldown_seconds = 10.0, damage = 0.0, range = 0.0, radius = 320.0, amount = 0.22 },
+  { key = "R", name = "万花绽放", effect = "nova", cooldown_seconds = 18.0, damage = 180.0, range = 0.0, radius = 280.0 },
+]
+
+[[heroes]]
+kind = "Brawler"
+name = "熔岩斗士"
+hp = 980.0
+speed = 240.0
+attack_damage = 58.0
+attack_range = 180.0
+skills = [
+  { key = "Q", name = "熔岩重拳", effect = "damage", cooldown_seconds = 4.0, damage = 130.0, range = 240.0, radius = 90.0 },
+  { key = "E", name = "地裂震击", effect = "stun", cooldown_seconds = 10.0, damage = 80.0, range = 300.0, radius = 150.0, duration_seconds = 1.0 },
+  { key = "R", name = "熔火冲撞", effect = "dash", cooldown_seconds = 14.0, damage = 220.0, range = 340.0, radius = 150.0 },
+]
+
+# ---- 地图阻挡（世界坐标矩形，用于流场与英雄碰撞）----
+[[obstacles]]   # 中央魔晶岩群，把战场分为上下两路
+x = 1320.0
+y = 640.0
+w = 560.0
+h = 520.0
+
+[[obstacles]]   # 红方野区岩石
+x = 960.0
+y = 820.0
+w = 160.0
+h = 160.0
+
+[[obstacles]]   # 蓝方野区岩石
+x = 2080.0
+y = 820.0
+w = 160.0
+h = 160.0
+
+[[obstacles]]   # 上路边缘树丛
+x = 1450.0
+y = 0.0
+w = 300.0
+h = 140.0
+
+[[obstacles]]   # 下路边缘树丛
+x = 1450.0
+y = 1660.0
+w = 300.0
+h = 140.0

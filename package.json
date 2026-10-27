@@ -1,0 +1,15 @@
+{
+  "name": "magic-dolls-tower-realms",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "npm install && npm install --prefix apps/client && bash scripts/build-wasm.sh",
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "dev": "concurrently -k -n server,client -c blue,magenta \"cargo run -p server\" \"npm --prefix apps/client run dev\"",
+    "build": "bash scripts/build-wasm.sh && cargo build --release -p server && npm --prefix apps/client run build",
+    "start": "cargo run --release -p server",
+    "test": "cargo test --workspace && npm --prefix apps/client test",
+    "replay": "cargo run --release -p server --bin replay --"
+  },
+  "devDependencies": { "concurrently": "^9.1.2" }
+}

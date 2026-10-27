@@ -1,0 +1,13 @@
+[package]
+name = "sim-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "浏览器单机模式：把 sim crate 编译为 wasm32，客户端直连本地模拟"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+shared.workspace = true
+sim.workspace = true

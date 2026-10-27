@@ -1,0 +1,11 @@
+[package]
+name = "sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+shared.workspace = true
+serde.workspace = true
+hecs = "0.10"
+toml = "0.8"

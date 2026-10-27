@@ -1,0 +1,12 @@
+# 服务端运行配置。所有字段都可用环境变量覆盖（括号内）。
+host = "0.0.0.0"              # (HOST)
+port = 8080                   # (PORT)
+full_snapshot_interval = 20   # 每 N 个 tick 广播一次全量关键帧（其余为增量）
+reconnect_seconds = 30        # 断线保留期：期间 AI 托管英雄，携带 token 可恢复
+idle_room_seconds = 60        # 房间无人连接超过该时长后关闭
+max_rooms = 200
+log_dir = "logs"              # (LOG_DIR) JSONL 对局日志
+static_dir = "apps/client/dist" # (STATIC_DIR) 生产模式托管前端
+game_config = "config/game.toml" # (GAME_CONFIG)
+database_url = ""             # (DATABASE_URL) 留空则不启用 PostgreSQL
+redis_url = ""                # (REDIS_URL) 留空则不启用 Redis

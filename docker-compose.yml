@@ -1,0 +1,38 @@
+# 一键部署：docker compose up -d --build  →  http://localhost:8080
+services:
+  game:
+    build: .
+    ports: ["8080:8080"]
+    environment:
+      DATABASE_URL: postgres://magic:magic@postgres:5432/magic_dolls
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - ./config:/app/config:ro     # 修改数值表后 docker compose restart game 即可生效
+      - ./logs:/app/logs            # 对局日志
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: magic
+      POSTGRES_PASSWORD: magic
+      POSTGRES_DB: magic_dolls
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U magic -d magic_dolls"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+volumes:
+  pgdata:

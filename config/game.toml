@@ -8,7 +8,7 @@ height = 1800.0
 grid = 64                    # 流场网格边长（64x64）
 match_seconds = 900          # 常规时限：15 分钟
 respawn_seconds = 3          # 死亡后复活倒计时（"立即复活"可设为 0）
-ai_fill_to = 2               # 每队人数不足时由 AI 魔法玩偶补足到该数量
+ai_fill_to = 4               # 每队人数不足时由 AI 魔法玩偶补足到该数量
 max_team_size = 4
 
 [base]

@@ -25,7 +25,7 @@ export function shellMarkup(): string {
         <h1>魔法玩偶</h1>
         <div class="english-title">塔 域 战 争 &nbsp;·&nbsp; TOWER REALMS WAR</div>
         <p class="intro-copy">魔法塔散发致命魔力辐射，每三十秒孕育一批变异魔兽。<br>击碎敌方两座魔法塔，基地护盾才会崩解——十五分钟未分胜负，超级双头魔兽将终结一切。</p>
-        <div class="feature-row"><div><b>2~4</b><span>每队玩偶</span></div><i></i><div><b>30<small>s</small></b><span>魔兽兵波</span></div><i></i><div><b>15<small>min</small></b><span>超时死斗</span></div></div>
+        <div class="feature-row"><div><b>4v4</b><span>团队对战</span></div><i></i><div><b>6</b><span>魔法玩偶</span></div><i></i><div><b>30<small>s</small></b><span>魔兽兵波</span></div><i></i><div><b>15<small>min</small></b><span>超时死斗</span></div></div>
         <div class="selected-showcase">
           <div class="showcase-orbit"><i></i><i></i><div id="showcase-icon" class="showcase-icon">✦</div></div>
           <div><small id="showcase-title"></small><h2 id="showcase-name"></h2><p id="showcase-lore"></p><span id="showcase-skill"></span></div>

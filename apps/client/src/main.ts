@@ -161,6 +161,7 @@ function launch(welcome: Welcome): void {
       scene: [],
     });
     game.scene.add('battle', scene, true, { connection, hud, audio, welcome, playerName, touch });
+    if (location.hash === '#debug') (window as unknown as { __mdtr: unknown }).__mdtr = { game, scene };
   } else {
     scene!.scene.restart({ connection, hud, audio, welcome, playerName, touch });
   }
@@ -188,7 +189,7 @@ castToggle.addEventListener('click', () => {
   castToggle.blur();
 });
 $('#audio-toggle').addEventListener('click', () => { audio.unlock(); $('#audio-toggle').textContent = audio.toggle() ? '✕' : '♪'; });
-window.addEventListener('keydown', (e) => { if (e.key === 'Tab' && game) e.preventDefault(); });
+// Tab 的默认行为由 Phaser addCapture 阻止；这里不能提前 preventDefault，否则 Phaser 会忽略该按键。
 
 // ---- 触屏：左半屏任意位置按下即出现浮动摇杆 + 点按技能/普攻图标 ----
 const stick = $('#touch-stick');

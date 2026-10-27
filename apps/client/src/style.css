@@ -129,3 +129,10 @@
 .touch-mode .player-hud{min-width:0;width:auto;max-width:none;padding:8px 14px}
 .touch-mode .hud-toast{bottom:84px}
 .player-hud .skill{pointer-events:auto}
+
+/* ---- 发布打磨 R1 ---- */
+.touch-mode .event-feed{right:auto;left:12px;top:118px;align-items:flex-start}
+.touch-mode .event-feed>div{border-right:0;border-left:2px solid #b794d0;padding:6px 18px 6px 9px;background:linear-gradient(-90deg,transparent,#0b1020cf)}
+.touch-mode .event-feed>div.red{border-left-color:var(--red)}.touch-mode .event-feed>div.blue{border-left-color:var(--blue)}
+.feature-row{gap:22px}
+@media(max-height:760px) and (min-width:851px){.lobby-footer span:last-child{display:none}.controls-hint{margin-top:10px}}

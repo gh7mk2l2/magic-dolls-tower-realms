@@ -218,7 +218,10 @@ impl Simulation {
             removed: Vec::new(),
             events: Vec::new(),
             rng: DeterministicRng(0x4d59_5df4_d0f3_3173),
-            team_names: [DEFAULT_TEAM_NAMES[0].to_owned(), DEFAULT_TEAM_NAMES[1].to_owned()],
+            team_names: [
+                DEFAULT_TEAM_NAMES[0].to_owned(),
+                DEFAULT_TEAM_NAMES[1].to_owned(),
+            ],
             team_named: [false, false],
             help_ready: BTreeMap::new(),
         };
@@ -398,7 +401,11 @@ impl Simulation {
         if name.is_empty() || name == self.team_names[index] {
             return false;
         }
-        let side = if team == Team::Red { "红方" } else { "蓝方" };
+        let side = if team == Team::Red {
+            "红方"
+        } else {
+            "蓝方"
+        };
         self.team_names[index] = name.clone();
         self.team_named[index] = true;
         self.announce(&format!("{side}战队命名为「{name}」"));
@@ -419,8 +426,12 @@ impl Simulation {
         if help {
             let ready = self.help_ready.get(&player_id).copied().unwrap_or(0);
             if self.tick >= ready {
-                self.help_ready.insert(player_id, self.tick + HELP_COOLDOWN_TICKS);
-                let at = Vec2 { x: mine.x, y: mine.y };
+                self.help_ready
+                    .insert(player_id, self.tick + HELP_COOLDOWN_TICKS);
+                let at = Vec2 {
+                    x: mine.x,
+                    y: mine.y,
+                };
                 self.event(EventKind::HelpRequest, Some(mine.team), at, at, 0.0, &name);
                 if let Some(event) = self.events.last_mut() {
                     event.source = me;
@@ -433,7 +444,10 @@ impl Simulation {
                 .map(|t| t.kind == EntityKind::Hero && t.team == mine.team && t.respawn == 0)
                 .unwrap_or(false);
             if valid {
-                let at = Vec2 { x: mine.x, y: mine.y };
+                let at = Vec2 {
+                    x: mine.x,
+                    y: mine.y,
+                };
                 self.event(EventKind::HelpAccepted, Some(mine.team), at, at, 0.0, &name);
                 if let Some(event) = self.events.last_mut() {
                     event.source = me;
@@ -1486,7 +1500,14 @@ impl Simulation {
                         self.apply_damage(victim, skill.damage, source);
                     }
                 }
-                self.event(EventKind::Skill, Some(team), position, p, skill.radius, &skill.name);
+                self.event(
+                    EventKind::Skill,
+                    Some(team),
+                    position,
+                    p,
+                    skill.radius,
+                    &skill.name,
+                );
                 if let Some(last) = self.events.last_mut() {
                     last.source = id;
                 }

@@ -228,16 +228,42 @@ export class BattleScene extends Phaser.Scene {
     let seed = 1337;
     const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
     for (const r of map.obstacles) {
-      rocks.fillStyle(0x060b12, 0.85);
-      rocks.fillRoundedRect(r.x - 6, r.y - 6, r.w + 12, r.h + 12, 26);
-      rocks.lineStyle(3, 0x7b62c9, 0.25);
-      rocks.strokeRoundedRect(r.x - 6, r.y - 6, r.w + 12, r.h + 12, 26);
+      // 有机轮廓的岩石高地：外圈软阴影 → 苔岩 → 顶面，边缘用一圈岩石/树木打散直角
+      const blob = (inset: number, color: number, alpha: number, rad: [number, number]) => {
+        rocks.fillStyle(color, alpha);
+        rocks.fillRoundedRect(r.x + inset, r.y + inset, r.w - inset * 2, r.h - inset * 2, Math.min(40, Math.min(r.w, r.h) / 2 - inset));
+        const step = 46;
+        for (let t = 0; t < (r.w + r.h) * 2; t += step) {
+          let x: number, y: number;
+          if (t < r.w) { x = r.x + t; y = r.y; }
+          else if (t < r.w + r.h) { x = r.x + r.w; y = r.y + (t - r.w); }
+          else if (t < r.w * 2 + r.h) { x = r.x + r.w - (t - r.w - r.h); y = r.y + r.h; }
+          else { x = r.x; y = r.y + r.h - (t - r.w * 2 - r.h); }
+          const cx = Phaser.Math.Clamp(x, r.x + inset + 20, r.x + r.w - inset - 20), cy = Phaser.Math.Clamp(y, r.y + inset + 20, r.y + r.h - inset - 20);
+          rocks.fillCircle(cx, cy, rad[0] + rnd() * (rad[1] - rad[0]));
+        }
+      };
+      blob(-14, 0x03070a, 0.45, [30, 52]);
+      blob(-2, 0x141d1b, 0.96, [24, 40]);
+      blob(16, 0x1f2b27, 0.95, [18, 30]);
+      blob(34, 0x26342d, 0.6, [14, 24]);
       const area = r.w * r.h;
       const count = Math.max(3, Math.floor(area / 9000));
       for (let i = 0; i < count; i++) {
         const x = r.x + 20 + rnd() * Math.max(1, r.w - 40), y = r.y + 30 + rnd() * Math.max(1, r.h - 40);
         const key = r.w > 400 ? (rnd() > 0.45 ? 'crystal' : 'rock') : (rnd() > 0.5 ? 'tree' : 'rock');
         this.add.image(x, y, key).setOrigin(0.5, 0.85).setScale(0.8 + rnd() * 0.7).setDepth(y);
+      }
+      // 沿边缘一圈岩石，盖住几何边界
+      const ring = Math.max(6, Math.floor((r.w + r.h) / 70));
+      for (let i = 0; i < ring; i++) {
+        const t = rnd() * (r.w + r.h) * 2;
+        let x: number, y: number;
+        if (t < r.w) { x = r.x + t; y = r.y + 8; }
+        else if (t < r.w + r.h) { x = r.x + r.w - 6; y = r.y + (t - r.w); }
+        else if (t < r.w * 2 + r.h) { x = r.x + r.w - (t - r.w - r.h); y = r.y + r.h - 4; }
+        else { x = r.x + 6; y = r.y + r.h - (t - r.w * 2 - r.h); }
+        this.add.image(x, y, rnd() > 0.35 ? 'rock' : 'tree').setOrigin(0.5, 0.85).setScale(0.6 + rnd() * 0.5).setDepth(y);
       }
     }
     // 边缘装饰
@@ -898,7 +924,10 @@ export class BattleScene extends Phaser.Scene {
       if (onScreen) continue;
       const dx = (e.x - view.centerX) * cam.zoom, dy = (e.y - 120 - view.centerY) * cam.zoom;
       const k = Math.min((cx - margin) / Math.max(1e-3, Math.abs(dx)), (cy - margin) / Math.max(1e-3, Math.abs(dy)));
-      const px = cx + dx * k, py = cy + dy * k, ang = Math.atan2(dy, dx);
+      const px = cx + dx * k, ang = Math.atan2(dy, dx);
+      // 避开顶部比分栏与底部 HUD / 技能轮盘
+      const bottomLimit = this.deps.touch.active && px > cam.width - 260 ? cam.height - 235 : cam.height - 150;
+      const py = Phaser.Math.Clamp(cy + dy * k, 110, Math.max(120, bottomLimit));
       // scrollFactor=0 的对象仍会绕相机中心缩放，这里反算回屏幕像素，并保持指示器大小恒定
       v.pointer.setPosition(cx + (px - cx) / cam.zoom, cy + (py - cy) / cam.zoom).setScale(1 / cam.zoom);
       (v.pointer.getData('arrow') as Phaser.GameObjects.Graphics).setRotation(ang).setPosition(Math.cos(ang) * 10, Math.sin(ang) * 10);

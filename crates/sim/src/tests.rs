@@ -36,7 +36,8 @@ fn layout_has_two_towers_one_base_and_zones_per_team() {
         assert_eq!(ids_of(&sim, EntityKind::Base, team).len(), 1);
         assert_eq!(ids_of(&sim, EntityKind::Tower, team).len(), 2);
         assert_eq!(ids_of(&sim, EntityKind::PoisonZone, team).len(), 2);
-        assert_eq!(sim.hero_count(team), 2, "AI 补足到 2 名");
+        let fill = sim.config.world.ai_fill_to;
+        assert_eq!(sim.hero_count(team), fill, "AI 补足到 {fill} 名");
     }
     assert_eq!(sim.flow_to_red.dimensions(), (64, 64));
 }
@@ -66,14 +67,14 @@ fn human_join_replaces_ai_and_ai_takes_over_on_disconnect() {
         .add_player(7, "甲", Some(Team::Red), HeroKind::Ranger)
         .unwrap();
     assert_eq!(team, Team::Red);
-    assert_eq!(sim.hero_count(Team::Red), 2);
+    assert_eq!(sim.hero_count(Team::Red), sim.config.world.ai_fill_to);
     assert_eq!(sim.human_count(Team::Red), 1);
     assert_eq!(sim.player_entity(7), Some(hero));
     assert!(sim.set_disconnected(7, true));
     assert!(sim.hero_state(hero).unwrap().ai);
     assert!(sim.set_disconnected(7, false));
     assert!(sim.remove_player(7));
-    assert_eq!(sim.hero_count(Team::Red), 2);
+    assert_eq!(sim.hero_count(Team::Red), sim.config.world.ai_fill_to);
 }
 
 #[test]
@@ -511,7 +512,10 @@ fn full_ai_match_finishes() {
 #[test]
 fn custom_team_name_first_wins_and_is_sanitized() {
     let mut sim = quiet();
-    assert_eq!(sim.team_names(), vec!["绯红玩偶团".to_string(), "湛蓝玩偶团".to_string()]);
+    assert_eq!(
+        sim.team_names(),
+        vec!["绯红玩偶团".to_string(), "湛蓝玩偶团".to_string()]
+    );
     assert!(sim.set_team_name(Team::Red, "  <火焰>之心战队超长名字  "));
     assert_eq!(sim.team_names()[0], "火焰之心战队超长");
     assert!(!sim.set_team_name(Team::Red, "第二个人"), "先命名者生效");
@@ -522,21 +526,70 @@ fn custom_team_name_first_wins_and_is_sanitized() {
 #[test]
 fn help_request_reaches_team_and_accept_targets_requester() {
     let mut sim = quiet();
-    let (a, _) = sim.add_player(1, "求救者", Some(Team::Red), HeroKind::Arcanist).unwrap();
-    let (b, _) = sim.add_player(2, "支援者", Some(Team::Red), HeroKind::Guardian).unwrap();
-    let (c, _) = sim.add_player(3, "敌人", Some(Team::Blue), HeroKind::Ranger).unwrap();
+    let (a, _) = sim
+        .add_player(1, "求救者", Some(Team::Red), HeroKind::Arcanist)
+        .unwrap();
+    let (b, _) = sim
+        .add_player(2, "支援者", Some(Team::Red), HeroKind::Guardian)
+        .unwrap();
+    let (c, _) = sim
+        .add_player(3, "敌人", Some(Team::Blue), HeroKind::Ranger)
+        .unwrap();
     sim.snapshot(true);
-    assert!(sim.set_input(1, InputFrame { seq: 1, help: true, ..InputFrame::default() }));
+    assert!(sim.set_input(
+        1,
+        InputFrame {
+            seq: 1,
+            help: true,
+            ..InputFrame::default()
+        }
+    ));
     let events = sim.snapshot(false).events;
-    let req = events.iter().find(|e| e.kind == EventKind::HelpRequest).expect("求救事件");
-    assert_eq!((req.source, req.team, req.text.as_str()), (a, Some(Team::Red), "求救者"));
+    let req = events
+        .iter()
+        .find(|e| e.kind == EventKind::HelpRequest)
+        .expect("求救事件");
+    assert_eq!(
+        (req.source, req.team, req.text.as_str()),
+        (a, Some(Team::Red), "求救者")
+    );
     // 冷却内重复求救无效
-    sim.set_input(1, InputFrame { seq: 2, help: true, ..InputFrame::default() });
-    assert!(!sim.snapshot(false).events.iter().any(|e| e.kind == EventKind::HelpRequest));
+    sim.set_input(
+        1,
+        InputFrame {
+            seq: 2,
+            help: true,
+            ..InputFrame::default()
+        },
+    );
+    assert!(!sim
+        .snapshot(false)
+        .events
+        .iter()
+        .any(|e| e.kind == EventKind::HelpRequest));
     // 敌方不能接受；队友可以
-    sim.set_input(3, InputFrame { seq: 1, accept_help: a, ..InputFrame::default() });
-    sim.set_input(2, InputFrame { seq: 1, accept_help: a, ..InputFrame::default() });
-    let accepted: Vec<_> = sim.snapshot(false).events.into_iter().filter(|e| e.kind == EventKind::HelpAccepted).collect();
+    sim.set_input(
+        3,
+        InputFrame {
+            seq: 1,
+            accept_help: a,
+            ..InputFrame::default()
+        },
+    );
+    sim.set_input(
+        2,
+        InputFrame {
+            seq: 1,
+            accept_help: a,
+            ..InputFrame::default()
+        },
+    );
+    let accepted: Vec<_> = sim
+        .snapshot(false)
+        .events
+        .into_iter()
+        .filter(|e| e.kind == EventKind::HelpAccepted)
+        .collect();
     assert_eq!(accepted.len(), 1);
     assert_eq!((accepted[0].source, accepted[0].target), (b, a));
     let _ = c;

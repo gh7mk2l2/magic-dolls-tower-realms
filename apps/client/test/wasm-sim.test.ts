@@ -36,7 +36,7 @@ describe.skipIf(!hasWasm)('Rust 模拟（WASM）', () => {
     expect(reply && 'Welcome' in reply).toBe(true);
     const welcome = (reply as { Welcome: Welcome }).Welcome;
     expect(welcome.map.grid).toBe(64);
-    expect(welcome.map.heroes).toHaveLength(3);
+    expect(welcome.map.heroes).toHaveLength(6);
 
     const store = new SnapshotStore();
     const grid = NavGrid.fromMap(welcome.map);

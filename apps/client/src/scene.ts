@@ -92,6 +92,7 @@ export class BattleScene extends Phaser.Scene {
   private lastHudUpdate = 0;
   private wasPoisoned = false;
   private ended = false;
+  private startedAt = 0;
 
   constructor() { super('battle'); }
 
@@ -108,6 +109,7 @@ export class BattleScene extends Phaser.Scene {
     this.lanesDrawn = false;
     this.ended = false;
     this.seenEvents.clear();
+    this.startedAt = performance.now();
     // 场景 init 之前就到达的快照（连接比场景启动快），在这里按顺序补上。
     const early = this.earlySnapshots; this.earlySnapshots = [];
     for (const snap of early) this.onSnapshot(snap);
@@ -202,14 +204,14 @@ export class BattleScene extends Phaser.Scene {
       const key = decals[Math.min(k, decals.length - 1)];
       const x = rnd() * map.width, y = rnd() * map.height;
       if (this.grid.isBlocked(x, y)) continue;
-      const scale = key === 'decal-rune' ? 0.9 + rnd() * 0.4 : key === 'decal-crack' ? 0.8 + rnd() * 0.6 : 0.35 + rnd() * 0.4;
+      const scale = key === 'decal-rune' ? 0.9 + rnd() * 0.4 : key === 'decal-crack' ? 0.45 + rnd() * 0.35 : 0.35 + rnd() * 0.4;
       (placed[key] ??= []).push([x, y, scale, rnd() * Math.PI * 2]);
     }
     // 同纹理连续绘制，减少 WebGL 批次切换
     for (const key of decals) {
       if (!this.textures.exists(key)) continue;
       for (const [x, y, scale, rot] of placed[key] ?? []) {
-        this.add.image(x, y, key).setScale(scale).setRotation(rot).setAlpha(key === 'decal-rune' ? 0.75 : 0.9).setDepth(-960);
+        this.add.image(x, y, key).setScale(scale).setRotation(rot).setAlpha(key === 'decal-rune' ? 0.6 : key === 'decal-crack' ? 0.4 : 0.9).setDepth(-960);
       }
     }
   }
@@ -422,6 +424,7 @@ export class BattleScene extends Phaser.Scene {
     for (const [id, view] of this.views) {
       if (!seen.has(id)) this.destroyView(id, view);
     }
+    this.declutterLabels(localId);
     this.updateBasePointers();
     if (localEntity) {
       const cam = this.cameras.main;
@@ -448,6 +451,30 @@ export class BattleScene extends Phaser.Scene {
     }
   }
 
+  /** 头顶名字互相重叠时，把靠后（y 更小）的名字向上错开，保证每个名字都能读出来。 */
+  private declutterLabels(localId: number): void {
+    const items: Array<{ v: View; x: number; y: number; w: number; local: boolean }> = [];
+    for (const [id, v] of this.views) {
+      if (v.kind !== 'Hero' || !v.label || !v.root.visible) continue;
+      items.push({ v, x: v.root.x, y: v.root.y, w: v.label.width, local: id === localId });
+    }
+    items.sort((a, b) => (a.local ? -1 : b.local ? 1 : b.y - a.y));
+    const placed: Array<{ x: number; y: number; w: number }> = [];
+    for (const it of items) {
+      let off = 0;
+      for (let tries = 0; tries < 4; tries++) {
+        const ly = it.y - 122 - off;
+        const hit = placed.some((p) => Math.abs(p.x - it.x) < (p.w + it.w) / 2 + 4 && Math.abs(p.y - ly) < 19);
+        if (!hit) break;
+        off += 19;
+      }
+      const cur = it.v.label!.y, target = -122 - off;
+      it.v.label!.y = cur + (target - cur) * 0.35;
+      it.v.status?.setY(it.v.label!.y - 18);
+      placed.push({ x: it.x, y: it.y - 122 - off, w: it.w });
+    }
+  }
+
   private inEnemyPoison(local: EntitySnapshot): boolean {
     if (local.respawn > 0) return false;
     for (const e of this.store.entities.values()) {
@@ -466,16 +493,16 @@ export class BattleScene extends Phaser.Scene {
       case 'PoisonZone': {
         const tint = POISON_TINT[e.team];
         const scale = (e.radius * 2) / 128;
-        view.aura = this.add.image(0, 0, 'glow').setScale(scale * 1.15).setTint(tint).setAlpha(0.28).setBlendMode(Phaser.BlendModes.ADD);
-        view.ring = this.add.image(0, 0, 'rune').setScale((e.radius * 2) / 256 * 1.04).setTint(tint).setAlpha(0.45).setBlendMode(Phaser.BlendModes.ADD);
+        view.aura = this.add.image(0, 0, 'glow').setScale(scale * 1.15).setTint(tint).setAlpha(0.18).setBlendMode(Phaser.BlendModes.ADD);
+        view.ring = this.add.image(0, 0, 'rune').setScale((e.radius * 2) / 256 * 1.04).setTint(tint).setAlpha(0.26).setBlendMode(Phaser.BlendModes.ADD);
         const edge = this.add.graphics();
-        edge.lineStyle(3, tint, 0.55).strokeCircle(0, 0, e.radius);
-        edge.lineStyle(10, tint, 0.12).strokeCircle(0, 0, e.radius - 6);
+        edge.lineStyle(3, tint, 0.7).strokeCircle(0, 0, e.radius);
+        edge.lineStyle(10, tint, 0.1).strokeCircle(0, 0, e.radius - 6);
         root.add([view.aura, edge, view.ring]);
         view.emitter = this.add.particles(e.x, e.y, 'particle', {
           emitZone: { type: 'random', source: new Phaser.Geom.Circle(0, 0, e.radius * 0.95) as unknown as Phaser.Types.GameObjects.Particles.RandomZoneSource },
           lifespan: { min: 1400, max: 2600 }, speedY: { min: -38, max: -12 }, speedX: { min: -6, max: 6 },
-          scale: { start: 0.55, end: 0 }, alpha: { start: 0.55, end: 0 }, tint, frequency: 70, blendMode: 'ADD',
+          scale: { start: 0.5, end: 0 }, alpha: { start: 0.45, end: 0 }, tint, frequency: 110, blendMode: 'ADD',
         });
         view.emitter.setDepth(e.y - e.radius + 2);
         root.setDepth(-800);
@@ -523,7 +550,7 @@ export class BattleScene extends Phaser.Scene {
         ring.lineStyle(isLocal ? 3 : 2, isLocal ? 0xfff2b0 : color, isLocal ? 0.9 : 0.6).strokeEllipse(0, 2, 62, 22);
         view.body = this.add.image(0, 0, `hero-${e.hero ?? 'Arcanist'}-${e.team}`).setOrigin(0.5, 0.88).setScale(0.82);
         view.bar = this.add.graphics();
-        view.label = this.add.text(0, -122, e.name ?? '', { fontFamily: 'Noto Sans SC, Microsoft YaHei, sans-serif', fontSize: '15px', color: isLocal ? '#fff2c4' : '#e7e3f2', stroke: '#05070d', strokeThickness: 4 }).setOrigin(0.5);
+        view.label = this.add.text(0, -122, e.name ?? '', { fontFamily: 'Noto Sans SC, Microsoft YaHei, sans-serif', fontSize: isLocal ? '16px' : '14px', fontStyle: isLocal ? 'bold' : 'normal', color: isLocal ? '#fff2c4' : e.team === this.deps.welcome.team ? '#d8f5e6' : '#ffd9de', stroke: '#05070d', strokeThickness: 4 }).setOrigin(0.5);
         view.status = this.add.text(0, -140, '', { fontSize: '16px', color: '#ffe27a', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5);
         const heroRig = this.makeRig(view, (e.hero ?? 'Arcanist') as RigName, e.team, e.hero === 'Brawler' ? 88 : 108);
         if (!heroRig) this.attachLegs(view, root, 0.82);
@@ -561,7 +588,7 @@ export class BattleScene extends Phaser.Scene {
     view.root.setPosition(e.x, e.y);
     if (e.kind === 'PoisonZone') {
       view.ring?.setRotation(t * 0.25);
-      view.aura?.setAlpha(0.22 + Math.sin(t * 2 + view.phase) * 0.06);
+      view.aura?.setAlpha(0.14 + Math.sin(t * 2 + view.phase) * 0.05);
       return;
     }
     view.root.setDepth(e.y);
@@ -585,6 +612,15 @@ export class BattleScene extends Phaser.Scene {
     }
     if (e.kind === 'Base') {
       view.banner?.setY(-385 + Math.sin(t * 2.2) * 6);
+      if (view.banner) {
+        // 己方基地旗帜只在开局引导时显示；敌方旗帜在靠近后变淡，避免遮挡战斗
+        const ally = e.team === this.deps.welcome.team;
+        const me = this.store.entities.get(this.deps.welcome.entity_id);
+        const near = me ? Math.hypot(me.x - e.x, me.y - e.y) < 950 : false;
+        const want = ally ? (now - this.startedAt < 30000 ? 1 : 0) : near ? 0.35 : 1;
+        const a = view.banner.alpha + (want - view.banner.alpha) * Math.min(1, delta / 300);
+        view.banner.setAlpha(a).setVisible(a > 0.02).setScale(this.deps.touch.active ? 0.72 : 1);
+      }
       view.ring?.setAlpha(0.38 + Math.sin(t * 2) * 0.14);
     }
     if (e.kind === 'Base' && view.aura) {
@@ -919,7 +955,7 @@ export class BattleScene extends Phaser.Scene {
       if (v.kind !== 'Base' || !v.pointer) continue;
       const e = this.store.entities.get(id);
       if (!e) continue;
-      const onScreen = view.contains(e.x, e.y - 120);
+      const onScreen = Phaser.Geom.Rectangle.Overlaps(view, new Phaser.Geom.Rectangle(e.x - 120, e.y - 420, 240, 440));
       v.pointer.setVisible(!onScreen);
       if (onScreen) continue;
       const dx = (e.x - view.centerX) * cam.zoom, dy = (e.y - 120 - view.centerY) * cam.zoom;

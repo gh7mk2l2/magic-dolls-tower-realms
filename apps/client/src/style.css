@@ -136,3 +136,45 @@
 .touch-mode .event-feed>div.red{border-left-color:var(--red)}.touch-mode .event-feed>div.blue{border-left-color:var(--blue)}
 .feature-row{gap:22px}
 @media(max-height:760px) and (min-width:851px){.lobby-footer span:last-child{display:none}.controls-hint{margin-top:10px}}
+
+/* ---- 发布打磨 r1：当前目标 / 新手引导 / 头像 / 手机紧凑 HUD ---- */
+.objective{position:absolute;z-index:10;left:22px;top:20px;min-width:190px;padding:8px 14px 9px 14px;background:linear-gradient(90deg,#0b1020e6,#0b102088);border-left:3px solid #f0c674;pointer-events:none;display:flex;flex-direction:column;gap:2px}
+.objective small{font-size:9px;letter-spacing:3px;color:#b9a77c}
+.objective b{font-size:15px;font-weight:600;color:#fff1cf;letter-spacing:1px;text-shadow:0 1px 3px #000}
+.objective span{font-size:10px;color:#a99fb6}
+.objective.push{border-color:#ff7a5c}.objective.push b{color:#ffd0bf}
+.objective.sudden{border-color:#c35bff}.objective.sudden b{color:#e6c2ff}
+.objective.changed{animation:objPulse .9s ease}
+@keyframes objPulse{0%{transform:scale(1.12);filter:brightness(1.8)}100%{transform:none;filter:none}}
+.coach{position:absolute;z-index:13;left:50%;bottom:136px;transform:translateX(-50%);pointer-events:none}
+.coach-card{display:flex;align-items:center;gap:12px;padding:10px 18px;background:#0b1020ee;border:1px solid #f0c67466;border-radius:6px;box-shadow:0 6px 24px #0009;animation:coachIn .35s ease both;white-space:nowrap}
+.coach-card i{font-style:normal;font-size:10px;color:#8b7f99}
+.coach-card b{font-size:14px;color:#ffe2a3;letter-spacing:1px}
+.coach-card span{font-size:13px;color:#e8e2f0}
+.coach-card kbd{display:inline-block;padding:0 5px;margin:0 1px;border:1px solid #ffffff40;border-radius:3px;background:#ffffff14;font-size:11px;color:#fff}
+@keyframes coachIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.player-portrait>span.has-img{width:100%;height:100%;display:grid;place-items:center;overflow:hidden}
+.player-portrait>span.has-img img{width:118%;height:118%;object-fit:cover;object-position:50% 18%;transform:translateY(6%)}
+#damage-flash{background:radial-gradient(ellipse,transparent 58%,#e5294466)}
+@media(max-width:1150px){.objective{top:96px}}
+.touch-mode .objective{left:calc(76px + env(safe-area-inset-left));top:8px;min-width:0;padding:5px 10px}
+.touch-mode .objective small{display:none}
+.touch-mode .objective b{font-size:12px}
+.touch-mode .objective span{font-size:9px}
+.touch-mode .coach{bottom:auto;top:66px}
+.touch-mode .coach-card{padding:7px 12px;gap:8px}
+.touch-mode .coach-card b{font-size:12px}.touch-mode .coach-card span{font-size:11px}
+.touch-mode .event-feed{right:auto;left:calc(76px + env(safe-area-inset-left));top:54px;align-items:flex-start}
+.touch-mode .event-feed>div{font-size:10px;padding:4px 14px 4px 8px;border-right:0;border-left:2px solid #b794d0;background:linear-gradient(-90deg,transparent,#0b1020cf)}
+.touch-mode .event-feed>div.red{border-color:var(--red)}.touch-mode .event-feed>div.blue{border-color:var(--blue)}
+.touch-mode .event-feed>div:nth-child(n+3){display:none}
+@media (max-height:500px){
+  .touch-mode .player-hud{height:50px;padding:6px 12px;min-width:0;width:auto;transform:translateX(-50%);bottom:6px;background:#0a0e1bd9}
+  .touch-mode .player-portrait{width:30px;height:30px;margin:0 14px 0 4px}
+  .touch-mode .player-portrait>span{font-size:15px}
+  .touch-mode .player-portrait>i{width:14px;height:14px;right:-6px;bottom:-6px;font-size:7px}
+  .touch-mode .vitals{width:170px;margin-right:0}
+  .touch-mode .player-meta{margin-bottom:4px}
+  .touch-mode .hud-tip{display:none}
+  .touch-mode .coach{top:52px}
+}

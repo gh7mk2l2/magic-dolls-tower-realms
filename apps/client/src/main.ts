@@ -146,9 +146,9 @@ connection.onError = (message, fatal) => {
 };
 
 function launch(welcome: Welcome): void {
+  setTouchMode(isTouchDevice());
   hud.show(playerName, selectedHero, welcome.team, welcome.map);
   hud.status(connection.isOffline ? 'offline' : 'connected');
-  setTouchMode(isTouchDevice());
   if (!game) {
     scene = new BattleScene();
     game = new Phaser.Game({

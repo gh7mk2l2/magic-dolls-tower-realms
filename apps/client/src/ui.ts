@@ -65,6 +65,7 @@ export function shellMarkup(): string {
       <div class="team-score blue"><b id="blue-score">0</b><div><small id="blue-team-name">${TEAM_NAMES.Blue}</small><div class="structures">${structure('Blue-Base', '基地')}${structure('Blue-0', '上塔')}${structure('Blue-1', '下塔')}</div></div><div class="team-emblem">◆</div></div>
     </header>
     <div class="game-top-tools"><div id="connection-pill" class="connection-pill"><i></i><span>已连接</span><small>20 Hz</small></div><button id="cast-toggle" class="cast-toggle" title="切换施法方式：按住技能键预览范围、松开释放 / 按下立即释放">松开施放</button><button id="audio-toggle" title="切换声音">♪</button><button id="leave-game" title="返回大厅">×</button></div>
+    <div id="objective" class="objective"><small>当前目标</small><b id="objective-text">摧毁敌方魔法塔</b><span id="objective-sub"></span></div><div id="coach" class="coach"></div>
     <div id="announcement" class="announcement"></div><div id="event-feed" class="event-feed"></div>
     <aside class="minimap-panel"><div class="minimap-title"><span>战场态势</span><small>MINIMAP</small></div><canvas id="minimap" width="400" height="225"></canvas><div class="minimap-legend"><span><i class="red-dot"></i>绯红</span><b>■塔 ◆基地 ●玩偶 ·魔兽</b><span><i class="blue-dot"></i>湛蓝</span></div></aside>
     <div id="respawn-panel" class="respawn-panel hidden"><small>玩偶修复中</small><b id="respawn-time">3.0</b><span>即将在基地复活</span></div>
@@ -109,7 +110,14 @@ export class GameHUD {
     $('#hud-player-name').textContent = name;
     const visual = HEROES[heroKind];
     $('#hud-hero-name').textContent = visual.name;
-    $('#hud-hero-icon').textContent = visual.icon;
+    const icon = $('#hud-hero-icon');
+    icon.textContent = visual.icon;
+    const img = new Image();
+    img.alt = ''; img.src = `${import.meta.env.BASE_URL}sprites/hero-${heroKind}-${team}.png`;
+    img.onload = () => { icon.replaceChildren(img); icon.classList.add('has-img'); };
+    icon.classList.remove('has-img');
+    this.objectiveKey = '';
+    this.startCoach();
     $('.player-hud').style.setProperty('--hero-color', visual.css);
     document.querySelector<HTMLElement>('.skill-bar')?.style.setProperty('--hero-color', visual.css);
     document.querySelectorAll<HTMLElement>('[data-skill]').forEach((node, i) => {
@@ -139,6 +147,56 @@ export class GameHUD {
     if (node) { node.classList.remove('denied'); void node.offsetWidth; node.classList.add('denied'); }
     const left = node?.querySelector('.cooldown-text')?.textContent;
     this.toast(left ? `技能冷却中 · ${left} 秒` : '现在无法施放');
+  }
+
+  private objectiveKey = '';
+  private coachTimers: number[] = [];
+
+  /** 新手引导：前两局在开局 30 秒内依次给出操作与目标提示。 */
+  private startCoach(): void {
+    this.coachTimers.forEach((t) => clearTimeout(t)); this.coachTimers = [];
+    const box = $('#coach'); box.replaceChildren();
+    const seen = Number(localStorage.getItem('mdtr-coach') ?? '0');
+    if (seen >= 2) return;
+    localStorage.setItem('mdtr-coach', String(seen + 1));
+    const touch = document.body.classList.contains('touch-mode');
+    const tips = touch ? [
+      ['移动与攻击', '左半屏拖动移动 · 按住 ⚔ 自动攻击最近的敌人'],
+      ['释放技能', '轻点技能自动瞄准 · 按住拖动手动瞄准，拖到 ✕ 取消'],
+      ['小心毒区', '敌方魔法塔周围的光圈是魔力毒区，站在里面每秒掉血'],
+      ['取胜之道', '先摧毁敌方两座塔，基地护盾才会消失 · 遇险点 🆘 求救'],
+    ] : [
+      ['移动与攻击', '<kbd>WASD</kbd> 移动 · 鼠标瞄准 · 按住 <kbd>左键</kbd> 普攻'],
+      ['释放技能', '<kbd>Q</kbd> <kbd>E</kbd> <kbd>R</kbd> 按住预览范围、松开施放 · 右键取消'],
+      ['小心毒区', '敌方魔法塔周围的光圈是魔力毒区，站在里面每秒掉血'],
+      ['取胜之道', '先摧毁敌方两座塔，基地护盾才会消失 · <kbd>Tab</kbd> 战况 · <kbd>G</kbd> 求救'],
+    ];
+    tips.forEach(([title, body], i) => {
+      this.coachTimers.push(window.setTimeout(() => {
+        box.innerHTML = `<div class="coach-card"><i>${i + 1}/${tips.length}</i><b>${title}</b><span>${body}</span></div>`;
+      }, 1200 + i * 6500));
+    });
+    this.coachTimers.push(window.setTimeout(() => box.replaceChildren(), 1200 + tips.length * 6500));
+  }
+
+  /** 左上角当前目标：随塔/基地状态变化。 */
+  private updateObjective(snapshot: Snapshot, entities: EntitySnapshot[]): void {
+    const enemy: Team = this.playerTeam === 'Red' ? 'Blue' : 'Red';
+    const towers = this.towerSlots.size >= 4
+      ? [0, 1].filter((i) => entities.some((e) => e.id === this.towerSlots.get(`${enemy}-${i}`))).length
+      : entities.filter((e) => e.kind === 'Tower' && e.team === enemy).length;
+    let title: string, sub: string, cls = '';
+    if (snapshot.phase === 'SuddenDeath') { title = '超时死斗'; sub = '超级双头魔兽出击 · 守住基地'; cls = 'sudden'; }
+    else if (towers > 0) { title = `摧毁敌方魔法塔 ${2 - towers}/2`; sub = '塔毁后敌方基地护盾消失'; }
+    else { title = '摧毁敌方基地'; sub = '护盾已破 · 全军出击！'; cls = 'push'; }
+    const key = `${title}|${sub}`;
+    if (key === this.objectiveKey) return;
+    this.objectiveKey = key;
+    $('#objective-text').textContent = title;
+    $('#objective-sub').textContent = sub;
+    const node = $('#objective');
+    node.className = `objective ${cls}`;
+    void node.offsetWidth; node.classList.add('changed');
   }
 
   private toastTimer = 0;
@@ -171,6 +229,8 @@ export class GameHUD {
     $('#announcement').replaceChildren();
     $('#event-feed').replaceChildren();
     $('#scoreboard').classList.add('hidden');
+    this.coachTimers.forEach((t) => clearTimeout(t)); this.coachTimers = [];
+    $('#coach').replaceChildren();
   }
 
   status(status: ConnectionStatus, detail?: string): void {
@@ -318,6 +378,7 @@ export class GameHUD {
         skill.querySelector<HTMLElement>('.cooldown-sweep')!.style.height = `${Math.min(100, (ticks / total) * 100)}%`;
       });
     }
+    this.updateObjective(snapshot, entities);
     this.drawMinimap(entities, local?.id);
   }
 

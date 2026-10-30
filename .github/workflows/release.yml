@@ -1,0 +1,129 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "发布到的标签（如 v0.3.0），留空则只构建产物不发布"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  web:
+    name: 前端 + sim.wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/client/package-lock.json
+      - name: 编译 sim.wasm
+        run: bash scripts/build-wasm.sh
+      - name: 构建前端
+        working-directory: apps/client
+        run: |
+          npm ci
+          npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: apps/client/dist
+          if-no-files-found: error
+
+  build:
+    name: 服务端 ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: cargo build --release
+        shell: bash
+        run: cargo build --release --locked -p server --bins --target ${{ matrix.target }}
+      - name: 收集二进制
+        shell: bash
+        run: |
+          mkdir -p out
+          ext=""; [[ "${{ matrix.target }}" == *windows* ]] && ext=".exe"
+          cp target/${{ matrix.target }}/release/server$ext out/
+          cp target/${{ matrix.target }}/release/replay$ext out/
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: out
+          if-no-files-found: error
+
+  package:
+    name: 打包并发布
+    needs: [web, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: 确定版本号
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            tag="${{ github.event.inputs.tag }}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag:-dev-${GITHUB_SHA::7}}" >> "$GITHUB_OUTPUT"
+      - name: 打包各平台
+        shell: bash
+        run: |
+          set -euo pipefail
+          for dir in artifacts/bin-*; do
+            target="${dir#artifacts/bin-}"
+            bash scripts/release/package.sh "${{ steps.ver.outputs.version }}" "$target" "$dir" artifacts/web-dist dist
+          done
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: dist
+      - name: 发布 GitHub Release
+        if: steps.ver.outputs.tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: 魔法玩偶：塔域战争 ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true

@@ -7,7 +7,10 @@ import rigData from './rig-data.json';
  * 打包在 rig-<角色>-<队伍>.png 图集里，坐标与关节支点由 scripts/rig-slice.py 生成到 rig-data.json。
  * 坐标以脚底中心为原点，单位为图集像素。
  */
-export type RigName = 'Arcanist' | 'Ranger' | 'Guardian' | 'Assassin' | 'Priestess' | 'Brawler' | 'minion' | 'super';
+export type RigName = 'Arcanist' | 'Ranger' | 'Guardian' | 'Assassin' | 'Priestess' | 'Brawler' | 'minion' | 'super'
+  // 新增 14 名玩偶的专属骨骼（键 = config.ts 里 HEROES[kind].art）
+  | 'stormcaller' | 'frostwitch' | 'tinker' | 'paladin' | 'alchemist' | 'swordsman' | 'starshot'
+  | 'puppeteer' | 'golem' | 'chrono' | 'flamedancer' | 'bard' | 'beastmaster' | 'illusionist';
 /** 图集名：内置 RigName，或集成进 rig-data.json 的新玩偶专属骨骼 id（见 heroArt.ts）。 */
 export type AtlasName = RigName | (string & {});
 type PartInfo = { x: number; y: number; w: number; h: number; ox: number; oy: number; px: number; py: number };

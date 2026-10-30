@@ -84,4 +84,28 @@ describe('20 名玩偶的表现层配置', () => {
     }
     expect(heroLook(null).atlas).toBe('Arcanist');
   });
+  it('14 名新玩偶都已集成专属立绘与骨骼（不回退借用）', async () => {
+    const { HEROES } = await import('../src/config');
+    const { HERO_KINDS } = await import('../src/protocol');
+    const { heroLook } = await import('../src/heroArt');
+    const rigData = (await import('../src/rig-data.json')).default as Record<string, { order: string[]; parts: Record<string, unknown> }>;
+    const { existsSync } = await import('node:fs');
+    const { resolve } = await import('node:path');
+    const dir = resolve(__dirname, '../public/sprites');
+    const fresh = HERO_KINDS.filter((k) => HEROES[k].base);
+    expect(fresh).toHaveLength(14);
+    for (const kind of fresh) {
+      const look = heroLook(kind);
+      const art = HEROES[kind].art!;
+      expect(look.dedicated, kind).toBe(true);
+      expect(look.tint).toBeNull();
+      expect(look.atlas).toBe(art);
+      expect(look.portrait).toBe(art);
+      expect(Object.keys(rigData[art].parts).sort()).toEqual(['armB', 'armF', 'head', 'legB', 'legF', 'torso']);
+      for (const team of ['Red', 'Blue']) {
+        expect(existsSync(`${dir}/rig-${art}-${team}.png`), `rig-${art}-${team}`).toBe(true);
+        expect(existsSync(`${dir}/hero-${art}-${team}.png`), `hero-${art}-${team}`).toBe(true);
+      }
+    }
+  });
 });

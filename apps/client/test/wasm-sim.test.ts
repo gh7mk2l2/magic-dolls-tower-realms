@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { SnapshotStore } from '../src/interpolation';
 import { NavGrid, Predictor } from '../src/prediction';
-import { decodeServerMessage, encodeClientMessage, PROTOCOL_VERSION, type ClientMessage, type ServerMessage, type Welcome } from '../src/protocol';
+import { decodeServerMessage, encodeClientMessage, HERO_KINDS, PROTOCOL_VERSION, type ClientMessage, type ServerMessage, type Welcome } from '../src/protocol';
 
 const wasmPath = new URL('../public/sim.wasm', import.meta.url);
 const hasWasm = existsSync(wasmPath);
@@ -36,7 +36,8 @@ describe.skipIf(!hasWasm)('Rust 模拟（WASM）', () => {
     expect(reply && 'Welcome' in reply).toBe(true);
     const welcome = (reply as { Welcome: Welcome }).Welcome;
     expect(welcome.map.grid).toBe(64);
-    expect(welcome.map.heroes).toHaveLength(6);
+    expect(welcome.map.heroes).toHaveLength(20);
+    expect(welcome.map.heroes.map((h) => h.kind)).toEqual([...HERO_KINDS]);
 
     const store = new SnapshotStore();
     const grid = NavGrid.fromMap(welcome.map);

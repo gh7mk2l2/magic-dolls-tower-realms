@@ -204,7 +204,7 @@ fn dead_hero_respawns_at_base() {
     sim.damage_entity(id, 1e5, Some(Team::Blue));
     assert_eq!(sim.entity_snapshot(id).unwrap().hp, 0.0);
     assert_eq!(sim.blue_score, 1);
-    for _ in 0..sim.config.world.respawn_seconds * TICK_RATE {
+    for _ in 0..sim.config.world.respawn_ticks(1) {
         sim.step();
     }
     let hero = sim.entity_snapshot(id).unwrap();
@@ -593,4 +593,571 @@ fn help_request_reaches_team_and_accept_targets_requester() {
     assert_eq!(accepted.len(), 1);
     assert_eq!((accepted[0].source, accepted[0].target), (b, a));
     let _ = c;
+}
+
+// ------------------------------------------------------------ 复活时间按队伍累计翻倍
+
+fn respawn_of(sim: &Simulation, id: u32) -> u32 {
+    sim.entity_snapshot(id).unwrap().respawn
+}
+
+#[test]
+fn respawn_doubles_per_team_death_count() {
+    // 例：A 队小明阵亡 1s；A 队小红随后阵亡 2s；B 队小刚阵亡 1s（对面独立计算）。
+    let mut sim = quiet();
+    let (ming, _) = sim
+        .add_player(1, "小明", Some(Team::Red), HeroKind::Arcanist)
+        .unwrap();
+    let (hong, _) = sim
+        .add_player(2, "小红", Some(Team::Red), HeroKind::Priestess)
+        .unwrap();
+    let (gang, _) = sim
+        .add_player(3, "小刚", Some(Team::Blue), HeroKind::Brawler)
+        .unwrap();
+    for (id, x) in [(ming, 1500.0), (hong, 1500.0), (gang, 1700.0)] {
+        place(&mut sim, id, Vec2 { x, y: 300.0 });
+    }
+    sim.damage_entity(ming, 1e6, Some(Team::Blue));
+    assert_eq!(respawn_of(&sim, ming), TICK_RATE, "红队第 1 次阵亡：1 秒");
+    sim.damage_entity(hong, 1e6, Some(Team::Blue));
+    assert_eq!(
+        respawn_of(&sim, hong),
+        2 * TICK_RATE,
+        "红队第 2 次阵亡：2 秒"
+    );
+    sim.damage_entity(gang, 1e6, Some(Team::Red));
+    assert_eq!(respawn_of(&sim, gang), TICK_RATE, "蓝队独立计数：1 秒");
+    assert_eq!(sim.team_deaths(Team::Red), 2);
+    assert_eq!(sim.team_deaths(Team::Blue), 1);
+
+    // 1 秒后小明复活、小红还剩 1 秒；小明再阵亡是红队第 3 次：4 秒
+    for _ in 0..TICK_RATE {
+        sim.step();
+    }
+    assert_eq!(respawn_of(&sim, ming), 0);
+    assert_eq!(respawn_of(&sim, hong), TICK_RATE);
+    place(
+        &mut sim,
+        ming,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    sim.damage_entity(ming, 1e6, Some(Team::Blue));
+    assert_eq!(respawn_of(&sim, ming), 4 * TICK_RATE);
+    // 快照字段与 HUD 倒计时一致（tick / 20 = 秒）
+    let snap = sim.peek_full();
+    let ming_snap = snap.entities.iter().find(|e| e.id == ming).unwrap();
+    assert_eq!(ming_snap.respawn as f32 / TICK_RATE as f32, 4.0);
+}
+
+#[test]
+fn respawn_counter_resets_each_match_and_saturates() {
+    let mut sim = quiet();
+    let (id, _) = sim
+        .add_player(1, "甲", Some(Team::Red), HeroKind::Guardian)
+        .unwrap();
+    // 模拟一局里阵亡了非常多次：不会溢出或 panic，复活时间封顶在 u32::MAX tick
+    sim.team_deaths[0] = u32::MAX - 1;
+    place(
+        &mut sim,
+        id,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    sim.damage_entity(id, 1e6, Some(Team::Blue));
+    assert_eq!(respawn_of(&sim, id), u32::MAX);
+    assert_eq!(sim.team_deaths(Team::Red), u32::MAX);
+    sim.team_deaths[0] = u32::MAX;
+    assert_eq!(sim.config.world.respawn_ticks(u32::MAX), u32::MAX);
+    // 新的一局重新从 1 秒开始
+    let fresh = quiet();
+    assert_eq!(fresh.team_deaths(Team::Red), 0);
+    assert_eq!(fresh.team_deaths(Team::Blue), 0);
+}
+
+// ------------------------------------------------------------ 20 名玩偶与新技能效果
+
+fn cast(sim: &mut Simulation, player: u64, seq: u32, slot: u8, aim: Vec2) {
+    sim.set_input(
+        player,
+        InputFrame {
+            seq,
+            aim_x: aim.x,
+            aim_y: aim.y,
+            skills: 1 << slot,
+            ..InputFrame::default()
+        },
+    );
+    sim.step();
+}
+
+fn hp(sim: &Simulation, id: u32) -> f32 {
+    sim.entity_snapshot(id).unwrap().hp
+}
+
+#[test]
+fn ai_lineups_are_unique_across_twenty_heroes() {
+    for seed in 1..30u64 {
+        let sim = Simulation::with_seed(GameConfig::default(), seed);
+        let mut kinds = sim.kinds_in_play(None);
+        assert_eq!(kinds.len(), 8);
+        kinds.sort();
+        kinds.dedup();
+        assert_eq!(kinds.len(), 8, "种子 {seed}：双方 8 个 AI 互不重复");
+    }
+    // 真人选了与本队 AI 相同的玩偶 → 该 AI 换人
+    let mut sim = Simulation::with_seed(GameConfig::default(), 7);
+    let red_ai = sim.kinds_in_play(Some(Team::Red));
+    let (_, team) = sim.add_player(1, "人", Some(Team::Red), red_ai[1]).unwrap();
+    let mut kinds = sim.kinds_in_play(Some(team));
+    kinds.sort();
+    kinds.dedup();
+    assert_eq!(kinds.len(), 4, "本队阵容去重");
+}
+
+#[test]
+fn chain_lightning_bounces_between_enemies() {
+    let mut sim = quiet();
+    let (me, _) = sim
+        .add_player(1, "雷", Some(Team::Red), HeroKind::Stormcaller)
+        .unwrap();
+    let foes: Vec<u32> = (0..3)
+        .map(|i| {
+            sim.add_player(10 + i, "敌", Some(Team::Blue), HeroKind::Colossus)
+                .unwrap()
+                .0
+        })
+        .collect();
+    place(
+        &mut sim,
+        me,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    for (i, &f) in foes.iter().enumerate() {
+        place(
+            &mut sim,
+            f,
+            Vec2 {
+                x: 1800.0 + i as f32 * 150.0,
+                y: 300.0,
+            },
+        );
+    }
+    let before: Vec<f32> = foes.iter().map(|&f| hp(&sim, f)).collect();
+    cast(
+        &mut sim,
+        1,
+        1,
+        0,
+        Vec2 {
+            x: 1800.0,
+            y: 300.0,
+        },
+    );
+    for (i, &f) in foes.iter().enumerate() {
+        assert!(hp(&sim, f) < before[i], "第 {i} 个敌人被闪电命中");
+    }
+    // 伤害逐跳衰减
+    assert!(before[0] - hp(&sim, foes[0]) > before[2] - hp(&sim, foes[2]));
+}
+
+#[test]
+fn shield_absorbs_and_fortify_reduces_damage() {
+    let mut sim = quiet();
+    let (pal, _) = sim
+        .add_player(1, "骑", Some(Team::Red), HeroKind::Paladin)
+        .unwrap();
+    place(
+        &mut sim,
+        pal,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    cast(
+        &mut sim,
+        1,
+        1,
+        1,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    assert!(sim.entity_snapshot(pal).unwrap().flags & flags::SHIELDED != 0);
+    let full = hp(&sim, pal);
+    sim.damage_entity(pal, 100.0, Some(Team::Blue));
+    assert_eq!(hp(&sim, pal), full, "护盾吸收伤害");
+
+    let (rock, _) = sim
+        .add_player(2, "岩", Some(Team::Red), HeroKind::Colossus)
+        .unwrap();
+    place(
+        &mut sim,
+        rock,
+        Vec2 {
+            x: 1500.0,
+            y: 600.0,
+        },
+    );
+    cast(
+        &mut sim,
+        2,
+        1,
+        1,
+        Vec2 {
+            x: 1500.0,
+            y: 600.0,
+        },
+    );
+    let before = hp(&sim, rock);
+    sim.damage_entity(rock, 100.0, Some(Team::Blue));
+    assert!((before - hp(&sim, rock) - 60.0).abs() < 1.5, "石肤减伤 40%");
+}
+
+#[test]
+fn taunt_pull_cloud_haste_regen_stealth_summon() {
+    let mut sim = quiet();
+    let (rock, _) = sim
+        .add_player(1, "岩", Some(Team::Red), HeroKind::Colossus)
+        .unwrap();
+    let (foe, _) = sim
+        .add_player(2, "敌", Some(Team::Blue), HeroKind::Arcanist)
+        .unwrap();
+    place(
+        &mut sim,
+        rock,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    place(
+        &mut sim,
+        foe,
+        Vec2 {
+            x: 1700.0,
+            y: 300.0,
+        },
+    );
+    // 嘲讽：敌人被强制走向巨像
+    cast(
+        &mut sim,
+        1,
+        1,
+        2,
+        Vec2 {
+            x: 1700.0,
+            y: 300.0,
+        },
+    );
+    assert!(sim.entity_snapshot(foe).unwrap().flags & flags::TAUNTED != 0);
+    let x0 = sim.entity_snapshot(foe).unwrap().x;
+    for _ in 0..5 {
+        sim.step();
+    }
+    assert!(
+        sim.entity_snapshot(foe).unwrap().x < x0,
+        "被嘲讽者走向嘲讽者"
+    );
+
+    // 拉拽
+    let mut sim = quiet();
+    let (night, _) = sim
+        .add_player(1, "夜", Some(Team::Red), HeroKind::Nightshade)
+        .unwrap();
+    let (foe, _) = sim
+        .add_player(2, "敌", Some(Team::Blue), HeroKind::Arcanist)
+        .unwrap();
+    place(
+        &mut sim,
+        night,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    place(
+        &mut sim,
+        foe,
+        Vec2 {
+            x: 1950.0,
+            y: 300.0,
+        },
+    );
+    cast(
+        &mut sim,
+        1,
+        1,
+        0,
+        Vec2 {
+            x: 1950.0,
+            y: 300.0,
+        },
+    );
+    let pulled = sim.entity_snapshot(foe).unwrap();
+    assert!(pulled.x < 1750.0, "被拉近：{}", pulled.x);
+    assert!(pulled.flags & flags::STUNNED != 0);
+
+    // 毒云：持续掉血
+    let mut sim = quiet();
+    let (alc, _) = sim
+        .add_player(1, "药", Some(Team::Red), HeroKind::Alchemist)
+        .unwrap();
+    let (foe, _) = sim
+        .add_player(2, "敌", Some(Team::Blue), HeroKind::Colossus)
+        .unwrap();
+    place(
+        &mut sim,
+        alc,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    place(
+        &mut sim,
+        foe,
+        Vec2 {
+            x: 1800.0,
+            y: 300.0,
+        },
+    );
+    cast(
+        &mut sim,
+        1,
+        1,
+        0,
+        Vec2 {
+            x: 1800.0,
+            y: 300.0,
+        },
+    );
+    let h1 = hp(&sim, foe);
+    for _ in 0..40 {
+        sim.step();
+    }
+    assert!(hp(&sim, foe) < h1 - 80.0, "毒云 2 秒内持续伤害");
+    let zone_events = sim
+        .snapshot(true)
+        .events
+        .iter()
+        .filter(|e| e.kind == EventKind::Zone)
+        .count();
+    assert!(zone_events >= 1);
+
+    // 加速 + 治疗光环
+    let mut sim = quiet();
+    let (bard, _) = sim
+        .add_player(1, "诗", Some(Team::Red), HeroKind::Bard)
+        .unwrap();
+    place(
+        &mut sim,
+        bard,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    cast(&mut sim, 1, 1, 1, Vec2::default());
+    assert!(sim.entity_snapshot(bard).unwrap().speed_mul > 1.2);
+    sim.damage_entity(bard, 300.0, Some(Team::Blue));
+    let low = hp(&sim, bard);
+    cast(&mut sim, 1, 2, 2, Vec2::default());
+    for _ in 0..40 {
+        sim.step();
+    }
+    assert!(hp(&sim, bard) > low + 50.0, "治疗光环持续回复");
+
+    // 隐身：敌方塔/英雄无法选中，普攻现身
+    let mut sim = quiet();
+    let (mir, _) = sim
+        .add_player(1, "影", Some(Team::Red), HeroKind::Mirage)
+        .unwrap();
+    place(
+        &mut sim,
+        mir,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    cast(&mut sim, 1, 1, 1, Vec2::default());
+    let snap = sim.entity_snapshot(mir).unwrap();
+    assert!(snap.flags & flags::STEALTH != 0);
+    let meta = sim.metas().into_iter().find(|m| m.id == mir).unwrap();
+    assert!(!sim.targetable(&meta));
+
+    // 召唤：炮台原地驻守并在到期后消失；狼灵会动
+    let mut sim = quiet();
+    let (art, _) = sim
+        .add_player(1, "匠", Some(Team::Red), HeroKind::Artificer)
+        .unwrap();
+    place(
+        &mut sim,
+        art,
+        Vec2 {
+            x: 1500.0,
+            y: 300.0,
+        },
+    );
+    let before = ids_of(&sim, EntityKind::Minion, Team::Red).len();
+    cast(
+        &mut sim,
+        1,
+        1,
+        1,
+        Vec2 {
+            x: 1600.0,
+            y: 300.0,
+        },
+    );
+    let turrets = ids_of(&sim, EntityKind::Minion, Team::Red);
+    assert_eq!(turrets.len(), before + 1);
+    let turret = sim.entity_snapshot(turrets[0]).unwrap();
+    assert_eq!(turret.name.as_deref(), Some("机关炮台"));
+    for _ in 0..(10 * TICK_RATE + 2) {
+        sim.step();
+    }
+    assert_eq!(
+        ids_of(&sim, EntityKind::Minion, Team::Red).len(),
+        before,
+        "炮台到期消失"
+    );
+}
+
+#[test]
+fn every_hero_can_cast_all_skills_without_panic() {
+    for &kind in HeroKind::ALL.iter() {
+        let mut sim = quiet();
+        let (me, _) = sim.add_player(1, "测", Some(Team::Red), kind).unwrap();
+        let (foe, _) = sim
+            .add_player(2, "敌", Some(Team::Blue), HeroKind::Guardian)
+            .unwrap();
+        place(
+            &mut sim,
+            me,
+            Vec2 {
+                x: 1500.0,
+                y: 300.0,
+            },
+        );
+        place(
+            &mut sim,
+            foe,
+            Vec2 {
+                x: 1700.0,
+                y: 300.0,
+            },
+        );
+        for slot in 0..3u8 {
+            cast(
+                &mut sim,
+                1,
+                slot as u32 + 1,
+                slot,
+                Vec2 {
+                    x: 1700.0,
+                    y: 300.0,
+                },
+            );
+            let cd = sim.entity_snapshot(me).unwrap().cooldowns[slot as usize];
+            assert!(cd > 0, "{kind:?} 技能 {slot} 进入冷却");
+        }
+        for _ in 0..200 {
+            sim.step();
+        }
+    }
+}
+
+/// 平衡统计：轮换阵容跑若干局全 AI 4v4，输出各玩偶胜率与 K/D。
+///
+/// `cargo test -p sim --release -- --ignored balance_report --nocapture`
+/// 局数可用环境变量 `BALANCE_MATCHES` 调整（默认 40）。
+#[test]
+#[ignore]
+fn balance_report() {
+    let matches: u64 = std::env::var("BALANCE_MATCHES")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(40);
+    #[derive(Default, Clone)]
+    struct Row {
+        games: u32,
+        wins: u32,
+        draws: u32,
+        kills: u32,
+        deaths: u32,
+        damage: f32,
+    }
+    let mut rows: BTreeMap<HeroKind, Row> = BTreeMap::new();
+    let mut total_ticks = 0u64;
+    for m in 0..matches {
+        // 确定性洗牌，保证每个玩偶出场次数接近
+        let mut rng = DeterministicRng(0x9e37_79b9_7f4a_7c15 ^ (m + 1).wrapping_mul(0x2545_f491));
+        let mut pool = HeroKind::ALL.to_vec();
+        for i in (1..pool.len()).rev() {
+            let j = ((rng.next_f32() * (i + 1) as f32) as usize).min(i);
+            pool.swap(i, j);
+        }
+        let mut sim = Simulation::with_seed(GameConfig::default(), m + 1);
+        sim.set_ai_lineup(Team::Red, &pool[0..4]);
+        sim.set_ai_lineup(Team::Blue, &pool[4..8]);
+        let limit =
+            (sim.config.world.match_seconds + sim.config.sudden_death.max_seconds + 5) * TICK_RATE;
+        while !sim.is_over() && sim.tick() < limit {
+            sim.step();
+        }
+        let summary = sim.summary();
+        total_ticks += summary.ticks as u64;
+        for p in &summary.players {
+            let row = rows.entry(p.hero).or_default();
+            row.games += 1;
+            match summary.winner {
+                Some(w) if w == p.team => row.wins += 1,
+                None => row.draws += 1,
+                _ => {}
+            }
+            row.kills += p.kills;
+            row.deaths += p.deaths;
+            row.damage += p.damage;
+        }
+    }
+    println!(
+        "\n平衡统计：{matches} 局，平均 {:.0} 秒/局",
+        total_ticks as f64 / matches as f64 / TICK_RATE as f64
+    );
+    println!(
+        "{:<12} {:>4} {:>7} {:>7} {:>7} {:>6} {:>9}",
+        "玩偶", "局", "胜率", "场均K", "场均D", "K/D", "场均伤害"
+    );
+    let config = GameConfig::default();
+    let mut sorted: Vec<_> = rows.into_iter().collect();
+    sorted.sort_by(|a, b| {
+        let wa = a.1.wins as f32 / a.1.games.max(1) as f32;
+        let wb = b.1.wins as f32 / b.1.games.max(1) as f32;
+        wb.total_cmp(&wa)
+    });
+    for (kind, r) in sorted {
+        let g = r.games.max(1) as f32;
+        println!(
+            "{:<10} {:>4} {:>6.0}% {:>7.1} {:>7.1} {:>6.2} {:>9.0}",
+            config.hero(kind).name,
+            r.games,
+            r.wins as f32 / g * 100.0,
+            r.kills as f32 / g,
+            r.deaths as f32 / g,
+            r.kills as f32 / r.deaths.max(1) as f32,
+            r.damage / g
+        );
+        let _ = r.draws;
+    }
 }

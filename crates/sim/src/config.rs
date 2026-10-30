@@ -24,7 +24,12 @@ pub struct WorldConfig {
     pub height: f32,
     pub grid: usize,
     pub match_seconds: u32,
-    pub respawn_seconds: u32,
+    /// 复活基数（秒）：某队第 n 次有玩偶阵亡，复活时间 = base * multiplier^(n-1)。
+    #[serde(default = "one_u32")]
+    pub respawn_base_secs: u32,
+    /// 复活时间倍数（默认 2：1、2、4、8…秒）。
+    #[serde(default = "two_u32")]
+    pub respawn_multiplier: u32,
     pub ai_fill_to: usize,
     pub max_team_size: usize,
 }
@@ -45,6 +50,29 @@ pub struct BaseConfig {
 
 fn one() -> f32 {
     1.0
+}
+
+fn one_u32() -> u32 {
+    1
+}
+
+fn two_u32() -> u32 {
+    2
+}
+
+impl WorldConfig {
+    /// 某队第 `death_index` 次（从 1 开始）阵亡时的复活 tick 数。
+    ///
+    /// 全程饱和运算：倍数的幂、乘以 tick 频率都不会溢出或 panic，极端情况下停在 `u32::MAX`。
+    /// 至少 1 tick（基数为 0 时即"立即复活"）。
+    pub fn respawn_ticks(&self, death_index: u32) -> u32 {
+        let exponent = death_index.saturating_sub(1);
+        let factor = u64::from(self.respawn_multiplier).saturating_pow(exponent);
+        let ticks = u64::from(self.respawn_base_secs)
+            .saturating_mul(u64::from(TICK_RATE))
+            .saturating_mul(factor);
+        u32::try_from(ticks).unwrap_or(u32::MAX).max(1)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,6 +176,24 @@ pub enum SkillEffect {
     Dash,
     Heal,
     Nova,
+    /// 连锁闪电：命中落点附近最近的敌人，再向 radius 内未命中的敌人弹射 count 次，每次伤害乘以 amount（0 视为 1）。
+    Chain,
+    /// 召唤：在落点召唤 count 个随从（summon_hp/summon_speed/summon_range，damage 为随从攻击力），存在 duration 秒；summon_speed=0 为固定炮台。
+    Summon,
+    /// 护盾：自身 radius 内友方英雄获得 amount×最大生命的护盾，持续 duration 秒。
+    Shield,
+    /// 持续区域：在落点留下 radius 的毒云/火海，持续 duration 秒，每秒造成 damage；amount>0 时附带该比例减速。
+    Cloud,
+    /// 拉拽：落点 radius 内的敌人被拉向施法者 amount 像素，并造成伤害、眩晕 duration 秒。
+    Pull,
+    /// 加速：自身 radius 内友方英雄移速提升 amount，持续 duration 秒。
+    Haste,
+    /// 治疗光环：自身 radius 内友方英雄在 duration 秒内持续回复 amount×最大生命。
+    Regen,
+    /// 坚守：自身减伤 amount，持续 duration 秒；radius 内敌人被嘲讽同样时长（强制走向施法者，不能施法）。
+    Fortify,
+    /// 隐身：duration 秒内敌方无法选中，移速提升 amount；普攻或施放其他技能时现身。
+    Stealth,
 }
 
 impl SkillEffect {
@@ -159,6 +205,15 @@ impl SkillEffect {
             Self::Dash => "dash",
             Self::Heal => "heal",
             Self::Nova => "nova",
+            Self::Chain => "chain",
+            Self::Summon => "summon",
+            Self::Shield => "shield",
+            Self::Cloud => "cloud",
+            Self::Pull => "pull",
+            Self::Haste => "haste",
+            Self::Regen => "regen",
+            Self::Fortify => "fortify",
+            Self::Stealth => "stealth",
         }
     }
 }
@@ -179,6 +234,31 @@ pub struct SkillConfig {
     pub duration_seconds: f32,
     #[serde(default)]
     pub amount: f32,
+    /// 连锁弹射次数 / 召唤数量。
+    #[serde(default)]
+    pub count: u32,
+    #[serde(default)]
+    pub summon_hp: f32,
+    #[serde(default)]
+    pub summon_speed: f32,
+    #[serde(default)]
+    pub summon_range: f32,
+}
+
+impl SkillEffect {
+    /// 以施法者自身为中心生效（不需要落点）。
+    pub fn self_centered(self) -> bool {
+        matches!(
+            self,
+            Self::Nova
+                | Self::Heal
+                | Self::Shield
+                | Self::Haste
+                | Self::Regen
+                | Self::Fortify
+                | Self::Stealth
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,6 +325,13 @@ impl GameConfig {
             };
             if hero.skills.len() != 3 {
                 return fail("每个英雄必须恰好配置 3 个技能");
+            }
+            for skill in &hero.skills {
+                if skill.effect == SkillEffect::Summon
+                    && (skill.count == 0 || skill.summon_hp <= 0.0)
+                {
+                    return fail("召唤技能需要 count > 0 且 summon_hp > 0");
+                }
             }
         }
         Ok(())
@@ -346,6 +433,35 @@ mod tests {
         config.wave.hp_curve = vec![1.0, 2.0, 5.0];
         assert_eq!(config.wave.stats(1).hp, config.wave.hp * 2.0);
         assert_eq!(config.wave.stats(99).hp, config.wave.hp * 5.0);
+    }
+
+    #[test]
+    fn respawn_doubles_and_saturates() {
+        let config = GameConfig::default();
+        let world = &config.world;
+        assert_eq!(world.respawn_base_secs, 1);
+        assert_eq!(world.respawn_multiplier, 2);
+        let secs: Vec<u32> = (1..=5)
+            .map(|n| world.respawn_ticks(n) / TICK_RATE)
+            .collect();
+        assert_eq!(secs, vec![1, 2, 4, 8, 16]);
+        // 超大次数：饱和而不是溢出/panic
+        assert_eq!(world.respawn_ticks(64), u32::MAX);
+        assert_eq!(world.respawn_ticks(u32::MAX), u32::MAX);
+        let mut instant = world.clone();
+        instant.respawn_base_secs = 0;
+        assert_eq!(instant.respawn_ticks(10), 1);
+    }
+
+    #[test]
+    fn all_twenty_heroes_configured() {
+        let config = GameConfig::default();
+        assert_eq!(HeroKind::ALL.len(), 20);
+        assert_eq!(config.hero_infos().len(), 20);
+        let mut names: Vec<&str> = config.heroes.iter().map(|h| h.name.as_str()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 20, "玩偶名字不重复");
     }
 
     #[test]

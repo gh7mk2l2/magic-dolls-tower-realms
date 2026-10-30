@@ -1,18 +1,25 @@
 // 与 crates/shared/src/lib.rs 一一对应的协议类型（MessagePack，字段名作为 map key）。
 import { decode, encode } from '@msgpack/msgpack';
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 export const TICK_RATE = 20;
 
-export const FLAGS = { STUNNED: 1, SLOWED: 2, INVULNERABLE: 4, CONTROL_IMMUNE: 8, AI: 16 } as const;
+export const FLAGS = { STUNNED: 1, SLOWED: 2, INVULNERABLE: 4, CONTROL_IMMUNE: 8, AI: 16, STEALTH: 32, SHIELDED: 64, TAUNTED: 128 } as const;
 
 export type Team = 'Red' | 'Blue';
 export type EntityKind = 'Hero' | 'Tower' | 'Base' | 'Minion' | 'SuperMinion' | 'PoisonZone';
-export type HeroKind = 'Arcanist' | 'Ranger' | 'Guardian' | 'Assassin' | 'Priestess' | 'Brawler';
+export const HERO_KINDS = [
+  'Arcanist', 'Ranger', 'Guardian', 'Assassin', 'Priestess', 'Brawler',
+  'Stormcaller', 'FrostWitch', 'Artificer', 'Paladin', 'Alchemist', 'Windblade', 'Starshooter',
+  'Nightshade', 'Colossus', 'Chronomancer', 'FlameDancer', 'Bard', 'Beastmaster', 'Mirage',
+] as const;
+export type HeroKind = typeof HERO_KINDS[number];
 export type Phase = 'Battle' | 'SuddenDeath' | 'Ended';
 export type EventKind =
   | 'Shot' | 'Hit' | 'Skill' | 'Poison' | 'TowerDestroyed' | 'SuddenDeath'
-  | 'Announcement' | 'Death' | 'Respawn' | 'Victory' | 'WaveSpawned' | 'HelpRequest' | 'HelpAccepted';
+  | 'Announcement' | 'Death' | 'Respawn' | 'Victory' | 'WaveSpawned' | 'HelpRequest' | 'HelpAccepted'
+  /** 持续区域脉冲（毒云/火海/冰暴）：x,y 中心，value 半径 */
+  | 'Zone';
 
 export interface Vec2 { x: number; y: number }
 

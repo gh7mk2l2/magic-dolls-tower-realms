@@ -12,6 +12,8 @@ interface SimExports {
   mdtr_out_len(): number;
   mdtr_send(ptr: number, len: number): void;
   mdtr_step(): number;
+  /** 可选：设置下一局随机种子（旧版 sim.wasm 没有该导出）。 */
+  mdtr_seed?(lo: number, hi: number): void;
 }
 
 let modulePromise: Promise<WebAssembly.Module> | null = null;
@@ -37,6 +39,8 @@ export class LocalSimulation {
     const module = await loadModule();
     const instance = await WebAssembly.instantiate(module, {});
     this.exports = instance.exports as unknown as SimExports;
+    // 每局不同的 AI 阵容
+    this.exports.mdtr_seed?.((Math.random() * 0x100000000) >>> 0, (Date.now() & 0xffffffff) >>> 0);
     for (const message of this.pending.splice(0)) this.send(message);
     this.nextTickAt = performance.now();
     // 固定 20Hz 推进；页面卡顿时最多追帧 5 次，保持时间一致。

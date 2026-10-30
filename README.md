@@ -139,3 +139,7 @@ npm run replay -- logs/xxx.jsonl --verify   # 用日志里的配置和输入重�
 ## 许可
 
 代码 MIT。所有美术、粒子、音效都是程序化生成的占位内容，不依赖任何付费引擎或素材（Phaser 3 为 MIT 许可）。
+
+## 致谢
+
+感谢来自 linux.do 社区佬友的支持。

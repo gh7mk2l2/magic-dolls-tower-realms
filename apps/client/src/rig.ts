@@ -8,15 +8,17 @@ import rigData from './rig-data.json';
  * 坐标以脚底中心为原点，单位为图集像素。
  */
 export type RigName = 'Arcanist' | 'Ranger' | 'Guardian' | 'Assassin' | 'Priestess' | 'Brawler' | 'minion' | 'super';
+/** 图集名：内置 RigName，或集成进 rig-data.json 的新玩偶专属骨骼 id（见 heroArt.ts）。 */
+export type AtlasName = RigName | (string & {});
 type PartInfo = { x: number; y: number; w: number; h: number; ox: number; oy: number; px: number; py: number };
 type RigInfo = { kind: 'biped' | 'quad'; order: string[]; height: number; parts: Record<string, PartInfo> };
-const DATA = rigData as unknown as Record<RigName, RigInfo>;
+const DATA = rigData as unknown as Record<string, RigInfo>;
 
-export const RIG_KEYS: string[] = (Object.keys(DATA) as RigName[]).flatMap((n) => [`rig-${n}-Red`, `rig-${n}-Blue`]);
+export const RIG_KEYS: string[] = Object.keys(DATA).flatMap((n) => [`rig-${n}-Red`, `rig-${n}-Blue`]);
 
 /** 在图集纹理上注册每个部件的 frame。加载完成后调用一次。 */
 export function registerRigFrames(scene: Phaser.Scene): void {
-  for (const name of Object.keys(DATA) as RigName[]) {
+  for (const name of Object.keys(DATA)) {
     for (const team of ['Red', 'Blue']) {
       const key = `rig-${name}-${team}`;
       if (!scene.textures.exists(key)) continue;
@@ -28,8 +30,8 @@ export function registerRigFrames(scene: Phaser.Scene): void {
   }
 }
 
-export function hasRig(scene: Phaser.Scene, name: RigName, team: string): boolean {
-  return scene.textures.exists(`rig-${name}-${team}`) && scene.textures.get(`rig-${name}-${team}`).has('torso');
+export function hasRig(scene: Phaser.Scene, name: AtlasName, team: string): boolean {
+  return !!DATA[name] && scene.textures.exists(`rig-${name}-${team}`) && scene.textures.get(`rig-${name}-${team}`).has('torso');
 }
 
 /** 一次性的动作片段：普攻或技能。 */
@@ -49,12 +51,18 @@ export class Rig {
   private clip: Clip | null = null;
   private stepSign = 1;
   private baseScale: number;
-  readonly name: RigName;
+  readonly name: AtlasName;
+  /** 动作风格（借用骨骼时与图集不同） */
+  readonly anim: string;
+  /** 常驻染色（借用骨骼的新玩偶按定位区分色调）；状态染色结束后恢复 */
+  private baseTint: number | null;
   /** 每次落脚时回调（扬尘） */
   onStep?: () => void;
 
-  constructor(scene: Phaser.Scene, name: RigName, team: string, targetHeight: number) {
+  constructor(scene: Phaser.Scene, name: AtlasName, team: string, targetHeight: number, anim?: string, tint: number | null = null) {
     this.name = name;
+    this.anim = anim ?? name;
+    this.baseTint = tint;
     this.info = DATA[name];
     const key = `rig-${name}-${team}`;
     this.baseScale = targetHeight / this.info.height;
@@ -67,6 +75,7 @@ export class Rig {
       const p = this.info.parts[partName];
       const img = scene.add.image(0, 0, key, partName).setOrigin((p.px - p.ox) / p.w, (p.py - p.oy) / p.h);
       this.parts.set(partName, img);
+      if (tint !== null) img.setTint(tint);
       if (groupMembers.has(partName)) {
         const pos = { x: p.px - torso.px, y: p.py - torso.py };
         img.setPosition(pos.x, pos.y);
@@ -82,7 +91,8 @@ export class Rig {
   }
 
   setTint(color: number | null): void {
-    for (const img of this.parts.values()) { if (color === null) img.clearTint(); else img.setTint(color); }
+    const c = color ?? this.baseTint;
+    for (const img of this.parts.values()) { if (c === null) img.clearTint(); else img.setTint(c); }
   }
 
   /** 开始一个动作片段（attack / Q / E / R / hit）。 */
@@ -184,7 +194,7 @@ export class Rig {
       if (p < 0.3) { const c = ease(p / 0.3); body(0, depth * c, 0, 1 + 0.06 * c, 1 - 0.1 * c); }
       else { const j = Math.sin(((p - 0.3) / 0.7) * Math.PI); root(-height * j, 0, 0); body(0, 0, 0, 1 - 0.03 * j, 1 + 0.05 * j); }
     };
-    switch (`${this.name}:${k}`) {
+    switch (`${this.anim}:${k}`) {
       // ---------------- 星语术士
       case 'Arcanist:attack': set('armB', 0.9 * e); set('armF', -0.3 * e); body(0.08 * e, 0, 4 * e, 1, 1); break;
       case 'Arcanist:Q': // 奥术冲击：双手前推

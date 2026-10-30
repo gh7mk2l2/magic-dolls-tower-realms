@@ -32,7 +32,7 @@ impl MatchLog {
         }
     }
 
-    pub fn open(dir: &Path, room: &str, id: u64, config: &GameConfig) -> Self {
+    pub fn open(dir: &Path, room: &str, id: u64, config: &GameConfig, seed: u64) -> Self {
         if let Err(error) = std::fs::create_dir_all(dir) {
             tracing::warn!(%error, "无法创建日志目录，日志关闭");
             return Self::disabled();
@@ -83,7 +83,7 @@ impl MatchLog {
         log.record(
             0,
             "header",
-            json!({ "room": room, "room_id": id, "protocol": shared::PROTOCOL_VERSION, "config": config_toml }),
+            json!({ "room": room, "room_id": id, "protocol": shared::PROTOCOL_VERSION, "seed": seed, "config": config_toml }),
         );
         log
     }

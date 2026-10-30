@@ -1,3 +1,4 @@
+import { portraitUrl } from './heroArt';
 import { HEROES, SKILL_KEYS, TEAM_CSS, TEAM_NAMES, teamNames, applyTeamNames } from './config';
 import type { ConnectionStatus } from './network';
 import { FLAGS, type EntitySnapshot, type HeroInfo, type HeroKind, type MapInfo, type MatchSummary, type Snapshot, type Team } from './protocol';
@@ -10,14 +11,15 @@ const $ = <T extends Element = HTMLElement>(selector: string) => document.queryS
 export function shellMarkup(): string {
   const heroButtons = (Object.keys(HEROES) as HeroKind[]).map((kind, i) => {
     const h = HEROES[kind];
-    return `<button class="hero-option${i === 0 ? ' selected' : ''}" data-hero="${kind}" style="--hero-color:${h.css}"><span class="hero-portrait"><img src="${import.meta.env.BASE_URL}sprites/hero-${kind}-Blue.png" alt="" onerror="this.replaceWith('${h.icon}')"></span><b>${h.name}</b><small>${h.title.split(' · ')[1]}</small></button>`;
+    const p = portraitUrl(kind, 'Blue');
+    return `<button class="hero-option${i === 0 ? ' selected' : ''}" data-hero="${kind}" title="${h.name} · ${h.title}" style="--hero-color:${h.css}"><span class="hero-portrait"><img src="${p.src}" alt="" loading="lazy"${p.filter ? ` style="filter:${p.filter} drop-shadow(0 4px 6px #0008)"` : ''} onerror="this.replaceWith('${h.icon}')"></span><b>${h.name}</b><small>${h.title.split(' · ')[1]}</small></button>`;
   }).join('');
   return `
   <div class="ambient"><div class="stars"></div><div class="nebula nebula-a"></div><div class="nebula nebula-b"></div><div class="runes-bg">ᚫ&nbsp;&nbsp;ᛟ&nbsp;&nbsp;ᚱ</div></div>
   <main id="lobby" class="lobby">
     <header class="lobby-header">
       <a class="brand" href="#" aria-label="魔法玩偶：塔域战争"><span class="brand-mark">偶</span><span><b>MAGIC DOLLS</b><small>TOWER REALMS</small></span></a>
-      <div class="server-state"><i id="server-dot"></i><span id="server-text">检测服务器…</span><em>协议 v2 · 20Hz</em></div>
+      <div class="server-state"><i id="server-dot"></i><span id="server-text">检测服务器…</span><em>协议 v3 · 20Hz</em></div>
     </header>
     <section class="lobby-content">
       <div class="hero-intro">
@@ -25,7 +27,7 @@ export function shellMarkup(): string {
         <h1>魔法玩偶</h1>
         <div class="english-title">塔 域 战 争 &nbsp;·&nbsp; TOWER REALMS WAR</div>
         <p class="intro-copy">魔法塔散发致命魔力辐射，每三十秒孕育一批变异魔兽。<br>击碎敌方两座魔法塔，基地护盾才会崩解——十五分钟未分胜负，超级双头魔兽将终结一切。</p>
-        <div class="feature-row"><div><b>4v4</b><span>团队对战</span></div><i></i><div><b>6</b><span>魔法玩偶</span></div><i></i><div><b>30<small>s</small></b><span>魔兽兵波</span></div><i></i><div><b>15<small>min</small></b><span>超时死斗</span></div></div>
+        <div class="feature-row"><div><b>4v4</b><span>团队对战</span></div><i></i><div><b>20</b><span>魔法玩偶</span></div><i></i><div><b>30<small>s</small></b><span>魔兽兵波</span></div><i></i><div><b>15<small>min</small></b><span>超时死斗</span></div></div>
         <div class="selected-showcase">
           <div class="showcase-orbit"><i></i><i></i><div id="showcase-icon" class="showcase-icon">✦</div></div>
           <div><small id="showcase-title"></small><h2 id="showcase-name"></h2><p id="showcase-lore"></p><span id="showcase-skill"></span></div>
@@ -45,7 +47,7 @@ export function shellMarkup(): string {
             <button class="team-option blue" data-team="Blue"><i>◆</i><span><b>${TEAM_NAMES.Blue}</b><small>东侧 · 守望</small></span></button>
           </div>
           <label class="team-name-field"><span>自定义战队名 <small>可选 · 本队第一位命名者生效 · 最多 8 字</small></span><input id="team-name" maxlength="8" autocomplete="off" placeholder="留空使用默认队名"></label>
-          <div class="field-label"><span>选择魔法玩偶</span><small>每个玩偶 3 个技能</small></div>
+          <div class="field-label"><span>选择魔法玩偶</span><small>20 名玩偶 · 每个 3 个技能 · 可滚动</small></div>
           <div class="hero-select">${heroButtons}</div>
           <div class="join-actions"><button id="play-offline" class="secondary-btn"><span>◈</span><div><b>单机演练</b><small>浏览器内 WASM 模拟</small></div></button><button id="play-online" class="primary-btn"><span>⚔</span><div><b>进入战场</b><small>联网对战</small></div><i>›</i></button></div>
           <p id="join-error" class="join-error" role="alert"></p>
@@ -113,7 +115,9 @@ export class GameHUD {
     const icon = $('#hud-hero-icon');
     icon.textContent = visual.icon;
     const img = new Image();
-    img.alt = ''; img.src = `${import.meta.env.BASE_URL}sprites/hero-${heroKind}-${team}.png`;
+    const portrait = portraitUrl(heroKind, team);
+    img.alt = ''; img.src = portrait.src;
+    if (portrait.filter) img.style.filter = portrait.filter;
     img.onload = () => { icon.replaceChildren(img); icon.classList.add('has-img'); };
     icon.classList.remove('has-img');
     this.objectiveKey = '';
@@ -412,6 +416,8 @@ export class GameHUD {
       if (e.kind === 'PoisonZone' || e.hp <= 0 || e.respawn > 0) continue;
       // 小地图只显示己方魔兽（敌方魔兽属于战争迷雾外信息）。
       if (e.kind === 'Minion' && e.team !== this.playerTeam) continue;
+      // 隐身的敌方玩偶不显示
+      if (e.kind === 'Hero' && e.team !== this.playerTeam && e.flags & FLAGS.STEALTH) continue;
       const x = e.x * sx, y = e.y * sy;
       ctx.fillStyle = TEAM_CSS[e.team];
       if (e.kind === 'Base') {

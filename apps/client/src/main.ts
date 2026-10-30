@@ -20,7 +20,8 @@ const hud = new GameHUD();
 const connection = new GameConnection();
 const touch: TouchState = { moveX: 0, moveY: 0, attack: false, skills: 0, active: false, aim: null, castAim: null };
 
-let selectedHero: HeroKind = (localStorage.getItem('mdtr-hero') as HeroKind) || 'Arcanist';
+const storedHero = localStorage.getItem('mdtr-hero') as HeroKind | null;
+let selectedHero: HeroKind = storedHero && storedHero in HEROES ? storedHero : 'Arcanist';
 let selectedTeam: Team = (localStorage.getItem('mdtr-team') as Team) || 'Red';
 let game: Phaser.Game | null = null;
 let scene: BattleScene | null = null;
@@ -45,6 +46,15 @@ function showcase(): void {
   document.querySelectorAll<HTMLElement>('.team-option').forEach((b) => b.classList.toggle('selected', b.dataset.team === selectedTeam));
 }
 showcase();
+// 选人网格可滚动：把上次选中的玩偶滚到可见处（只滚网格自身，不带动整页）
+{
+  const box = document.querySelector<HTMLElement>('.hero-select');
+  const sel = box?.querySelector<HTMLElement>('.hero-option.selected');
+  if (box && sel) {
+    const offset = sel.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    if (offset < 0 || offset > box.clientHeight - sel.offsetHeight) box.scrollTop += offset - 6;
+  }
+}
 
 document.querySelectorAll<HTMLElement>('.hero-option').forEach((button) => button.addEventListener('click', () => {
   selectedHero = button.dataset.hero as HeroKind; audio.unlock(); audio.play('Click'); showcase();

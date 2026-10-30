@@ -61,3 +61,27 @@ describe('预测', () => {
     expect(pred.pendingCount).toBe(3);
   });
 });
+
+describe('20 名玩偶的表现层配置', () => {
+  it('每个 HeroKind 都有视觉配置，新玩偶缺专属资源时回退到借用骨骼并染色', async () => {
+    const { HEROES } = await import('../src/config');
+    const { HERO_KINDS } = await import('../src/protocol');
+    const { heroLook } = await import('../src/heroArt');
+    expect(Object.keys(HEROES).sort()).toEqual([...HERO_KINDS].sort());
+    for (const kind of HERO_KINDS) {
+      const v = HEROES[kind];
+      expect(v.skills).toHaveLength(3);
+      expect(v.desc).toHaveLength(3);
+      const look = heroLook(kind);
+      if (v.base) {
+        expect(v.art).toMatch(/^[a-z]+$/);
+        // 专属资源未集成进 rig-data.json 时借用基础骨骼
+        if (!look.dedicated) { expect(look.atlas).toBe(v.base); expect(look.tint).not.toBeNull(); }
+        else expect(look.atlas).toBe(v.art);
+      } else {
+        expect(look.atlas).toBe(kind);
+      }
+    }
+    expect(heroLook(null).atlas).toBe('Arcanist');
+  });
+});

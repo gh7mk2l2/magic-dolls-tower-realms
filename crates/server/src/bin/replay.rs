@@ -105,7 +105,8 @@ fn replay(lines: &[Value]) -> anyhow::Result<()> {
         .find(|l| l["type"] == "header")
         .ok_or_else(|| anyhow::anyhow!("缺少 header"))?;
     let config = GameConfig::from_toml(header["data"]["config"].as_str().unwrap_or(""))?;
-    let mut sim = Simulation::new(config);
+    let seed = header["data"]["seed"].as_u64().unwrap_or(sim::DEFAULT_SEED);
+    let mut sim = Simulation::with_seed(config, seed);
     let mut expected = None;
     for line in lines {
         let t = line["t"].as_u64().unwrap_or(0) as u32;

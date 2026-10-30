@@ -29,6 +29,7 @@ function crystal(ctx: CanvasRenderingContext2D, x: number, y: number, size: numb
 
 /** AI 生成的精灵图（public/sprites/<key>.png）。加载失败的键会回退到下方的程序化纹理。 */
 import { RIG_KEYS } from './rig';
+import { portraitSpriteKeys } from './heroArt';
 
 export const SPRITE_KEYS: string[] = [
   ...RIG_KEYS,
@@ -36,8 +37,9 @@ export const SPRITE_KEYS: string[] = [
   'decal-grass', 'decal-flowers', 'decal-stones', 'decal-mushrooms', 'decal-leaves', 'decal-crack', 'decal-rune',
   ...(['Red', 'Blue'] as const).flatMap((t) => [
     `base-${t}`, `tower-${t}`, `minion-${t}`, `super-${t}`,
-    ...['Arcanist', 'Ranger', 'Guardian', 'Assassin', 'Priestess', 'Brawler'].map((h) => `hero-${h}-${t}`),
   ]),
+  // 立绘：初始 6 名 + 已集成专属资源的新玩偶（见 heroArt.ts 的命名约定）
+  ...portraitSpriteKeys(),
 ];
 
 export function preloadSprites(scene: Phaser.Scene): void {
@@ -132,7 +134,8 @@ export function createWorldTextures(scene: Phaser.Scene): void {
       const g = ctx.createLinearGradient(0, 0, 40, 0); g.addColorStop(0, '#ffffff00'); g.addColorStop(1, color); ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(30, 4); ctx.lineTo(38, 10); ctx.lineTo(30, 16); ctx.closePath(); ctx.fill(); ellipse(ctx, 30, 10, 7, 5, '#fff');
     });
   }
-  for (const hero of Object.keys(HEROES) as HeroKind[]) {
+  // 程序化兜底立绘：只需要初始 6 名（新玩偶缺资源时借用它们的立绘）
+  for (const hero of (Object.keys(HEROES) as HeroKind[]).filter((h) => !HEROES[h].base)) {
     for (const team of ['Red', 'Blue'] as Team[]) {
       const teamColor = colors[team], color = HEROES[hero].css;
       canvas(scene, `hero-${hero}-${team}`, 110, 120, (ctx) => {

@@ -7,7 +7,11 @@ width = 3200.0
 height = 1800.0
 grid = 64                    # 流场网格边长（64x64）
 match_seconds = 900          # 常规时限：15 分钟
-respawn_seconds = 3          # 死亡后复活倒计时（"立即复活"可设为 0）
+# 复活时间按队伍累计翻倍：每队各自计数（每局清零），该队第 n 次有玩偶阵亡，
+# 该玩偶复活时间 = respawn_base_secs * respawn_multiplier^(n-1) 秒（默认 1、2、4、8…）。
+# 饱和运算，不会溢出；base 设为 0 即"立即复活"。
+respawn_base_secs = 1
+respawn_multiplier = 2
 ai_fill_to = 4               # 每队人数不足时由 AI 魔法玩偶补足到该数量
 max_team_size = 4
 
@@ -76,8 +80,17 @@ ai_aggro_range = 900.0
 
 # ---- 魔法玩偶与技能 ----
 # effect 可选：damage（范围伤害）、stun（范围伤害+眩晕）、slow（范围伤害+减速）、
-#             dash（向瞄准方向位移）、heal（范围治疗友方，amount 为最大生命比例）、
-#             nova（以自身为中心的范围伤害）
+#             dash（向瞄准方向位移，damage>0 时落点范围伤害）、heal（范围治疗友方，amount 为最大生命比例）、
+#             nova（以自身为中心的范围伤害）、
+#             chain（连锁闪电：命中落点附近敌人后在 radius 内弹射 count 次，每跳伤害 ×amount）、
+#             summon（在落点召唤 count 个随从：summon_hp / summon_speed（0=炮台）/ summon_range，damage 为随从攻击，持续 duration_seconds）、
+#             shield（自身 radius 内友方获得 amount×最大生命护盾，持续 duration_seconds）、
+#             cloud（落点留下 radius 的持续区域，每秒 damage，持续 duration_seconds；amount>0 附带减速）、
+#             pull（落点 radius 内敌人被拉向自己 amount 像素，造成 damage 并眩晕 duration_seconds）、
+#             haste（自身 radius 内友方移速 +amount，持续 duration_seconds）、
+#             regen（自身 radius 内友方在 duration_seconds 内回复 amount×最大生命）、
+#             fortify（自身减伤 amount，持续 duration_seconds；radius>0 时嘲讽范围内敌人同样时长）、
+#             stealth（隐身 duration_seconds，敌方无法选中，移速 +amount；普攻/施放其他技能即现身）
 # 每个英雄 3 个技能，依次绑定 Q / E / R。
 
 [[heroes]]
@@ -156,6 +169,188 @@ skills = [
   { key = "Q", name = "熔岩重拳", effect = "damage", cooldown_seconds = 4.0, damage = 130.0, range = 240.0, radius = 90.0 },
   { key = "E", name = "地裂震击", effect = "stun", cooldown_seconds = 10.0, damage = 80.0, range = 300.0, radius = 150.0, duration_seconds = 1.0 },
   { key = "R", name = "熔火冲撞", effect = "dash", cooldown_seconds = 14.0, damage = 220.0, range = 340.0, radius = 150.0 },
+]
+
+[[heroes]]
+kind = "Stormcaller"
+name = "雷鸣法师"
+hp = 660.0
+speed = 250.0
+attack_damage = 54.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "雷霆链", effect = "chain", cooldown_seconds = 5.0, damage = 125.0, range = 520.0, radius = 230.0, count = 3, amount = 0.75 },
+  { key = "E", name = "静电禁锢", effect = "stun", cooldown_seconds = 10.0, damage = 55.0, range = 420.0, radius = 100.0, duration_seconds = 0.9 },
+  { key = "R", name = "万雷天罚", effect = "chain", cooldown_seconds = 16.0, damage = 230.0, range = 600.0, radius = 280.0, count = 5, amount = 0.85 },
+]
+
+[[heroes]]
+kind = "FrostWitch"
+name = "冰晶女巫"
+hp = 650.0
+speed = 250.0
+attack_damage = 48.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "冰锥", effect = "slow", cooldown_seconds = 5.0, damage = 115.0, range = 480.0, radius = 100.0, duration_seconds = 2.0, amount = 0.35 },
+  { key = "E", name = "寒冰禁锢", effect = "stun", cooldown_seconds = 11.0, damage = 70.0, range = 420.0, radius = 90.0, duration_seconds = 1.4 },
+  { key = "R", name = "极寒风暴", effect = "cloud", cooldown_seconds = 18.0, damage = 75.0, range = 500.0, radius = 230.0, duration_seconds = 4.0, amount = 0.5 },
+]
+
+[[heroes]]
+kind = "Artificer"
+name = "机关工匠"
+hp = 680.0
+speed = 245.0
+attack_damage = 48.0
+attack_range = 290.0
+skills = [
+  { key = "Q", name = "齿轮飞弹", effect = "damage", cooldown_seconds = 4.5, damage = 115.0, range = 480.0, radius = 90.0 },
+  { key = "E", name = "机关炮台", effect = "summon", cooldown_seconds = 12.0, damage = 38.0, range = 220.0, duration_seconds = 10.0, count = 1, summon_hp = 420.0, summon_speed = 0.0, summon_range = 300.0 },
+  { key = "R", name = "炮台阵列", effect = "summon", cooldown_seconds = 20.0, damage = 46.0, range = 320.0, duration_seconds = 12.0, count = 2, summon_hp = 520.0, summon_speed = 0.0, summon_range = 320.0 },
+]
+
+[[heroes]]
+kind = "Paladin"
+name = "圣光骑士"
+hp = 920.0
+speed = 235.0
+attack_damage = 48.0
+attack_range = 200.0
+skills = [
+  { key = "Q", name = "圣光裁决", effect = "damage", cooldown_seconds = 5.0, damage = 110.0, range = 260.0, radius = 110.0 },
+  { key = "E", name = "圣盾术", effect = "shield", cooldown_seconds = 12.0, radius = 280.0, duration_seconds = 4.0, amount = 0.25 },
+  { key = "R", name = "神圣冲锋", effect = "dash", cooldown_seconds = 14.0, damage = 170.0, range = 300.0, radius = 140.0 },
+]
+
+[[heroes]]
+kind = "Alchemist"
+name = "毒雾药师"
+hp = 640.0
+speed = 255.0
+attack_damage = 46.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "剧毒药瓶", effect = "cloud", cooldown_seconds = 7.0, damage = 62.0, range = 480.0, radius = 140.0, duration_seconds = 4.0 },
+  { key = "E", name = "腐蚀药剂", effect = "slow", cooldown_seconds = 8.0, damage = 80.0, range = 450.0, radius = 110.0, duration_seconds = 2.5, amount = 0.35 },
+  { key = "R", name = "瘟疫毒云", effect = "cloud", cooldown_seconds = 18.0, damage = 85.0, range = 520.0, radius = 260.0, duration_seconds = 6.0, amount = 0.25 },
+]
+
+[[heroes]]
+kind = "Windblade"
+name = "风行剑客"
+hp = 640.0
+speed = 285.0
+attack_damage = 60.0
+attack_range = 180.0
+skills = [
+  { key = "Q", name = "疾风突刺", effect = "dash", cooldown_seconds = 5.0, damage = 115.0, range = 320.0, radius = 110.0 },
+  { key = "E", name = "回旋斩", effect = "nova", cooldown_seconds = 7.0, damage = 120.0, radius = 170.0 },
+  { key = "R", name = "风刃连斩", effect = "dash", cooldown_seconds = 14.0, damage = 235.0, range = 380.0, radius = 150.0 },
+]
+
+[[heroes]]
+kind = "Starshooter"
+name = "星辰射手"
+hp = 660.0
+speed = 265.0
+attack_damage = 62.0
+attack_range = 360.0
+skills = [
+  { key = "Q", name = "星光穿刺", effect = "damage", cooldown_seconds = 4.5, damage = 135.0, range = 620.0, radius = 80.0 },
+  { key = "E", name = "星跃", effect = "dash", cooldown_seconds = 7.0, range = 260.0 },
+  { key = "R", name = "陨星坠落", effect = "damage", cooldown_seconds = 13.0, damage = 320.0, range = 760.0, radius = 150.0 },
+]
+
+[[heroes]]
+kind = "Nightshade"
+name = "暗夜魔偶"
+hp = 700.0
+speed = 255.0
+attack_damage = 50.0
+attack_range = 260.0
+skills = [
+  { key = "Q", name = "暗影锁链", effect = "pull", cooldown_seconds = 9.0, damage = 90.0, range = 520.0, radius = 90.0, duration_seconds = 0.6, amount = 260.0 },
+  { key = "E", name = "夜幕笼罩", effect = "slow", cooldown_seconds = 8.0, damage = 70.0, range = 420.0, radius = 140.0, duration_seconds = 2.0, amount = 0.4 },
+  { key = "R", name = "深渊漩涡", effect = "pull", cooldown_seconds = 18.0, damage = 160.0, range = 450.0, radius = 220.0, duration_seconds = 1.2, amount = 200.0 },
+]
+
+[[heroes]]
+kind = "Colossus"
+name = "岩石巨像"
+hp = 1050.0
+speed = 225.0
+attack_damage = 56.0
+attack_range = 180.0
+skills = [
+  { key = "Q", name = "碎岩重击", effect = "stun", cooldown_seconds = 8.0, damage = 90.0, range = 220.0, radius = 110.0, duration_seconds = 0.8 },
+  { key = "E", name = "石肤", effect = "fortify", cooldown_seconds = 12.0, radius = 0.0, duration_seconds = 4.0, amount = 0.4 },
+  { key = "R", name = "巨像怒吼", effect = "fortify", cooldown_seconds = 16.0, radius = 260.0, duration_seconds = 2.0, amount = 0.3 },
+]
+
+[[heroes]]
+kind = "Chronomancer"
+name = "时光术士"
+hp = 640.0
+speed = 255.0
+attack_damage = 46.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "时光沙尘", effect = "slow", cooldown_seconds = 6.0, damage = 90.0, range = 480.0, radius = 130.0, duration_seconds = 2.5, amount = 0.45 },
+  { key = "E", name = "时间加速", effect = "haste", cooldown_seconds = 12.0, radius = 300.0, duration_seconds = 3.0, amount = 0.35 },
+  { key = "R", name = "时间停滞", effect = "stun", cooldown_seconds = 18.0, damage = 80.0, range = 450.0, radius = 180.0, duration_seconds = 1.5 },
+]
+
+[[heroes]]
+kind = "FlameDancer"
+name = "烈焰舞姬"
+hp = 660.0
+speed = 265.0
+attack_damage = 52.0
+attack_range = 280.0
+skills = [
+  { key = "Q", name = "火焰扇", effect = "damage", cooldown_seconds = 4.5, damage = 125.0, range = 420.0, radius = 120.0 },
+  { key = "E", name = "炽焰火海", effect = "cloud", cooldown_seconds = 10.0, damage = 60.0, range = 450.0, radius = 160.0, duration_seconds = 3.0 },
+  { key = "R", name = "焚天之舞", effect = "nova", cooldown_seconds = 16.0, damage = 210.0, radius = 260.0 },
+]
+
+[[heroes]]
+kind = "Bard"
+name = "吟游诗人"
+hp = 640.0
+speed = 260.0
+attack_damage = 44.0
+attack_range = 300.0
+skills = [
+  { key = "Q", name = "激昂音符", effect = "damage", cooldown_seconds = 5.0, damage = 100.0, range = 480.0, radius = 110.0 },
+  { key = "E", name = "疾行之歌", effect = "haste", cooldown_seconds = 12.0, radius = 320.0, duration_seconds = 3.0, amount = 0.3 },
+  { key = "R", name = "治愈乐章", effect = "regen", cooldown_seconds = 16.0, radius = 340.0, duration_seconds = 5.0, amount = 0.35 },
+]
+
+[[heroes]]
+kind = "Beastmaster"
+name = "狼灵猎手"
+hp = 820.0
+speed = 255.0
+attack_damage = 56.0
+attack_range = 190.0
+skills = [
+  { key = "Q", name = "裂爪撕咬", effect = "damage", cooldown_seconds = 4.5, damage = 120.0, range = 240.0, radius = 100.0 },
+  { key = "E", name = "狼灵召唤", effect = "summon", cooldown_seconds = 12.0, damage = 30.0, range = 200.0, duration_seconds = 10.0, count = 2, summon_hp = 300.0, summon_speed = 290.0, summon_range = 45.0 },
+  { key = "R", name = "群狼猎杀", effect = "summon", cooldown_seconds = 20.0, damage = 40.0, range = 250.0, duration_seconds = 12.0, count = 3, summon_hp = 380.0, summon_speed = 300.0, summon_range = 50.0 },
+]
+
+[[heroes]]
+kind = "Mirage"
+name = "镜像魅影"
+hp = 600.0
+speed = 285.0
+attack_damage = 58.0
+attack_range = 200.0
+skills = [
+  { key = "Q", name = "幻影突袭", effect = "dash", cooldown_seconds = 6.0, damage = 110.0, range = 300.0, radius = 110.0 },
+  { key = "E", name = "隐匿", effect = "stealth", cooldown_seconds = 12.0, duration_seconds = 3.0, amount = 0.3 },
+  { key = "R", name = "镜像分身", effect = "summon", cooldown_seconds = 18.0, damage = 40.0, range = 150.0, duration_seconds = 8.0, count = 2, summon_hp = 300.0, summon_speed = 285.0, summon_range = 180.0 },
 ]
 
 # ---- 地图阻挡（世界坐标矩形，用于流场与英雄碰撞）----

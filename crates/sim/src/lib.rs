@@ -60,15 +60,57 @@ struct Status {
     slow: u32,
     slow_amount: f32,
     control_immune: bool,
+    /// 护盾剩余吸收量与剩余 tick。
+    shield: f32,
+    shield_ticks: u32,
+    haste: u32,
+    haste_amount: f32,
+    /// 持续回复：每 tick 回复最大生命的比例。
+    regen: u32,
+    regen_per_tick: f32,
+    /// 减伤。
+    guard: u32,
+    guard_amount: f32,
+    /// 被嘲讽：强制走向 `taunt_by`。
+    taunt: u32,
+    taunt_by: u32,
+    stealth: u32,
+    stealth_amount: f32,
 }
 impl Status {
     fn speed_mul(&self) -> f32 {
-        if self.slow > 0 {
+        let mut mul = if self.slow > 0 {
             (1.0 - self.slow_amount).clamp(0.1, 1.0)
         } else {
             1.0
+        };
+        if self.haste > 0 {
+            mul *= 1.0 + self.haste_amount.max(0.0);
         }
+        if self.stealth > 0 {
+            mul *= 1.0 + self.stealth_amount.max(0.0);
+        }
+        mul.clamp(0.1, 2.5)
     }
+}
+/// 技能召唤的随从（炮台/狼灵/镜像），本质是一只不属于兵波的魔兽。
+#[derive(Debug, Clone)]
+struct Summon {
+    owner: u32,
+    ttl: u32,
+    label: String,
+}
+/// 持续性区域（毒云 / 火海 / 冰暴）。
+#[derive(Debug, Clone)]
+struct Cloud {
+    team: Team,
+    source: u32,
+    center: Vec2,
+    radius: f32,
+    dps: f32,
+    slow: f32,
+    total: u32,
+    left: u32,
 }
 #[derive(Debug, Clone, Copy)]
 struct Minion {
@@ -117,6 +159,7 @@ struct Meta {
     hp: f32,
     radius: f32,
     alive: bool,
+    stealth: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -181,10 +224,21 @@ pub struct Simulation {
     team_named: [bool; 2],
     /// 玩家下次可以求救的 tick。
     help_ready: BTreeMap<u64, u32>,
+    /// 每队本局累计阵亡次数 [红, 蓝]，决定复活时间（1、2、4、8… 秒）。
+    team_deaths: [u32; 2],
+    clouds: Vec<Cloud>,
 }
+
+/// 默认随机种子（`Simulation::new`）。
+pub const DEFAULT_SEED: u64 = 0x4d59_5df4_d0f3_3173;
 
 impl Simulation {
     pub fn new(config: GameConfig) -> Self {
+        Self::with_seed(config, DEFAULT_SEED)
+    }
+
+    /// 指定随机种子（影响 AI 选人与兵波站位抖动）；同配置、同种子、同输入得到同样的对局。
+    pub fn with_seed(config: GameConfig, seed: u64) -> Self {
         let grid = NavGrid::new(
             config.world.width,
             config.world.height,
@@ -217,13 +271,15 @@ impl Simulation {
             super_respawns: Vec::new(),
             removed: Vec::new(),
             events: Vec::new(),
-            rng: DeterministicRng(0x4d59_5df4_d0f3_3173),
+            rng: DeterministicRng(if seed == 0 { DEFAULT_SEED } else { seed }),
             team_names: [
                 DEFAULT_TEAM_NAMES[0].to_owned(),
                 DEFAULT_TEAM_NAMES[1].to_owned(),
             ],
             team_named: [false, false],
             help_ready: BTreeMap::new(),
+            team_deaths: [0, 0],
+            clouds: Vec::new(),
         };
         for team in [Team::Red, Team::Blue] {
             sim.spawn_structures(team);
@@ -257,6 +313,11 @@ impl Simulation {
     }
     pub fn player_count(&self) -> usize {
         self.players.len()
+    }
+
+    /// 某队本局累计阵亡次数。
+    pub fn team_deaths(&self, team: Team) -> u32 {
+        self.team_deaths[team_index(team)]
     }
 
     pub fn player_team(&self, player_id: u64) -> Option<Team> {
@@ -311,14 +372,9 @@ impl Simulation {
         });
         let id = match replace {
             Some(id) => {
+                self.assign_hero_kind(id, hero);
                 let entity = self.entities[&id];
-                let hp = self.config.hero_hp(hero);
-                let speed = self.config.hero_speed(hero);
-                let spawn = self.team_spawn(team, id);
-                let damage = self.config.hero_attack_damage(hero);
-                let range = self.config.hero_attack_range(hero);
                 if let Ok(mut state) = self.world.get::<&mut HeroState>(entity) {
-                    state.kind = hero;
                     state.owner = Some(player_id);
                     state.name = name;
                     state.ai = false;
@@ -326,22 +382,7 @@ impl Simulation {
                     state.input = InputFrame::default();
                     state.last_seq = 0;
                     state.ack = 0;
-                    state.respawn = 0;
-                    state.cooldowns = [0; 3];
                     state.stats = HeroStats::default();
-                }
-                self.set_component(
-                    entity,
-                    Health {
-                        current: hp,
-                        max: hp,
-                    },
-                );
-                self.set_component(entity, MoveSpeed(speed));
-                self.set_component(entity, Position(spawn));
-                if let Ok(mut combat) = self.world.get::<&mut Combat>(entity) {
-                    combat.damage = damage;
-                    combat.range = range;
                 }
                 id
             }
@@ -349,7 +390,115 @@ impl Simulation {
         };
         self.players.insert(player_id, id);
         self.rebalance_ai(team);
+        self.dedup_ai(team);
         Ok((id, team))
+    }
+
+    /// 把英雄换成另一种玩偶：重置血量、属性、冷却与状态，回到出生点。
+    fn assign_hero_kind(&mut self, id: u32, hero: HeroKind) {
+        let Some(&entity) = self.entities.get(&id) else {
+            return;
+        };
+        let Some(team) = self.team_of(id) else { return };
+        let hp = self.config.hero_hp(hero);
+        let speed = self.config.hero_speed(hero);
+        let spawn = self.team_spawn(team, id);
+        let damage = self.config.hero_attack_damage(hero);
+        let range = self.config.hero_attack_range(hero);
+        if let Ok(mut state) = self.world.get::<&mut HeroState>(entity) {
+            state.kind = hero;
+            state.respawn = 0;
+            state.cooldowns = [0; 3];
+            if state.owner.is_none() {
+                state.name = format!("AI·{}", self.config.hero(hero).name);
+            }
+        }
+        self.set_component(
+            entity,
+            Health {
+                current: hp,
+                max: hp,
+            },
+        );
+        self.set_component(entity, MoveSpeed(speed));
+        self.set_component(entity, Position(spawn));
+        self.set_component(entity, Status::default());
+        if let Ok(mut combat) = self.world.get::<&mut Combat>(entity) {
+            combat.damage = damage;
+            combat.range = range;
+        }
+    }
+
+    /// 已在场上的玩偶种类（`team` 为空时统计双方）。
+    fn kinds_in_play(&self, team: Option<Team>) -> Vec<HeroKind> {
+        self.hero_ids(team)
+            .into_iter()
+            .filter_map(|id| self.hero_state(id).map(|h| h.kind))
+            .collect()
+    }
+
+    /// 为 AI 挑一个玩偶：优先双方都没人用的，其次本队没人用的；在候选里用种子随机挑选。
+    fn pick_ai_kind(&mut self, team: Team) -> HeroKind {
+        let all = self.kinds_in_play(None);
+        let mine = self.kinds_in_play(Some(team));
+        let mut pool: Vec<HeroKind> = HeroKind::ALL
+            .iter()
+            .copied()
+            .filter(|k| !all.contains(k))
+            .collect();
+        if pool.is_empty() {
+            pool = HeroKind::ALL
+                .iter()
+                .copied()
+                .filter(|k| !mine.contains(k))
+                .collect();
+        }
+        if pool.is_empty() {
+            pool = HeroKind::ALL.to_vec();
+        }
+        let index = ((self.rng.next_f32() * pool.len() as f32) as usize).min(pool.len() - 1);
+        pool[index]
+    }
+
+    /// 阵容去重：真人选了与本队 AI 相同的玩偶时，让该 AI 换一个。
+    fn dedup_ai(&mut self, team: Team) {
+        let ids = self.hero_ids(Some(team));
+        for (i, &id) in ids.iter().enumerate() {
+            let Some((kind, is_ai)) = self.hero_state(id).map(|h| (h.kind, h.owner.is_none()))
+            else {
+                continue;
+            };
+            if !is_ai {
+                continue;
+            }
+            let clash = ids.iter().enumerate().any(|(j, &other)| {
+                j != i
+                    && self
+                        .hero_state(other)
+                        .map(|h| h.kind == kind && (h.owner.is_some() || j < i))
+                        .unwrap_or(false)
+            });
+            if clash {
+                let next = self.pick_ai_kind(team);
+                self.assign_hero_kind(id, next);
+            }
+        }
+    }
+
+    /// 调试/平衡测试：按顺序把本队 AI 换成指定玩偶。
+    pub fn set_ai_lineup(&mut self, team: Team, kinds: &[HeroKind]) {
+        let ais: Vec<u32> = self
+            .hero_ids(Some(team))
+            .into_iter()
+            .filter(|&id| {
+                self.hero_state(id)
+                    .map(|h| h.owner.is_none())
+                    .unwrap_or(false)
+            })
+            .collect();
+        for (id, &kind) in ais.into_iter().zip(kinds) {
+            self.assign_hero_kind(id, kind);
+        }
     }
 
     pub fn remove_player(&mut self, player_id: u64) -> bool {
@@ -548,9 +697,12 @@ impl Simulation {
             return;
         }
         self.update_heroes();
+        self.update_status();
+        self.update_summons();
         self.update_ai();
         self.move_heroes();
         self.use_skills();
+        self.update_clouds();
         self.update_combat();
         self.separate_units();
         self.apply_poison();
@@ -796,9 +948,8 @@ impl Simulation {
         loop {
             let total = self.hero_count(team);
             if total < desired {
-                let count = HeroKind::ALL.len();
-                // 红蓝两队错开起点，保证双方阵容不同且尽量不重复
-                let kind = HeroKind::ALL[(total + usize::from(team == Team::Blue) * 3) % count];
+                // 阵容去重：优先挑双方都没人用的玩偶
+                let kind = self.pick_ai_kind(team);
                 let name = format!("AI·{}", self.config.hero(kind).name);
                 self.spawn_hero(team, kind, None, name);
             } else if total > desired {
@@ -1057,10 +1208,6 @@ impl Simulation {
                     }
                 }
             }
-            if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
-                status.stun = status.stun.saturating_sub(1);
-                status.slow = status.slow.saturating_sub(1);
-            }
             if let Ok(mut combat) = self.world.get::<&mut Combat>(entity) {
                 combat.attacked_this_tick = false;
             }
@@ -1091,6 +1238,147 @@ impl Simulation {
             0.0,
             "魔法玩偶已复活",
         );
+    }
+
+    /// 所有带状态的单位（英雄、魔兽、召唤物）：控制/增益计时递减，持续回复结算。
+    fn update_status(&mut self) {
+        for (_, (status, health)) in self.world.query_mut::<(&mut Status, &mut Health)>() {
+            status.stun = status.stun.saturating_sub(1);
+            status.slow = status.slow.saturating_sub(1);
+            status.haste = status.haste.saturating_sub(1);
+            status.guard = status.guard.saturating_sub(1);
+            status.taunt = status.taunt.saturating_sub(1);
+            status.stealth = status.stealth.saturating_sub(1);
+            status.shield_ticks = status.shield_ticks.saturating_sub(1);
+            if status.shield_ticks == 0 {
+                status.shield = 0.0;
+            }
+            if status.regen > 0 {
+                status.regen -= 1;
+                if health.current > 0.0 {
+                    health.current =
+                        (health.current + health.max * status.regen_per_tick).min(health.max);
+                }
+            }
+        }
+    }
+
+    /// 召唤物寿命到期后消失。
+    fn update_summons(&mut self) {
+        let mut expired = Vec::new();
+        for (entity, summon) in self.world.query_mut::<&mut Summon>() {
+            summon.ttl = summon.ttl.saturating_sub(1);
+            if summon.ttl == 0 {
+                expired.push(entity);
+            }
+        }
+        let mut ids: Vec<u32> = expired.into_iter().map(|e| self.network_id(e)).collect();
+        ids.sort_unstable();
+        for id in ids {
+            self.despawn(id);
+        }
+    }
+
+    /// 持续区域：每 0.5 秒对区域内敌方单位结算一次伤害（不伤建筑），每秒发一次脉冲事件。
+    fn update_clouds(&mut self) {
+        if self.clouds.is_empty() {
+            return;
+        }
+        let mut clouds = std::mem::take(&mut self.clouds);
+        for cloud in &mut clouds {
+            cloud.left = cloud.left.saturating_sub(1);
+            let age = cloud.total - cloud.left;
+            if age.is_multiple_of(TICK_RATE / 2) {
+                let victims: Vec<u32> = self
+                    .metas()
+                    .into_iter()
+                    .filter(|m| {
+                        m.team != cloud.team
+                            && m.alive
+                            && matches!(
+                                m.kind,
+                                EntityKind::Hero | EntityKind::Minion | EntityKind::SuperMinion
+                            )
+                            && self.targetable(m)
+                            && distance(m.position, cloud.center) <= cloud.radius + m.radius
+                    })
+                    .map(|m| m.id)
+                    .collect();
+                let source = DamageSource {
+                    team: Some(cloud.team),
+                    entity: Some(cloud.source),
+                    bypass_shield: false,
+                };
+                for victim in victims {
+                    self.apply_damage(victim, cloud.dps * 0.5, source);
+                    if cloud.slow > 0.0 {
+                        self.apply_control(victim, |s| {
+                            s.slow = s.slow.max(TICK_RATE * 3 / 4);
+                            s.slow_amount = s.slow_amount.max(cloud.slow);
+                        });
+                    }
+                }
+            }
+            if age.is_multiple_of(TICK_RATE) && cloud.left > 0 {
+                self.event(
+                    EventKind::Zone,
+                    Some(cloud.team),
+                    cloud.center,
+                    cloud.center,
+                    cloud.radius,
+                    "",
+                );
+                if let Some(last) = self.events.last_mut() {
+                    last.source = cloud.source;
+                }
+            }
+        }
+        clouds.retain(|c| c.left > 0);
+        // 结算期间新施放的区域追加在后面
+        clouds.append(&mut self.clouds);
+        self.clouds = clouds;
+    }
+
+    /// 对非免控单位施加控制/状态。
+    fn apply_control(&mut self, id: u32, apply: impl FnOnce(&mut Status)) {
+        if let Some(&entity) = self.entities.get(&id) {
+            if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
+                if !status.control_immune {
+                    apply(&mut status);
+                }
+            }
+        }
+    }
+
+    /// 对友方英雄施加增益。
+    fn apply_buff(&mut self, id: u32, apply: impl FnOnce(&mut Status, f32)) {
+        if let Some(&entity) = self.entities.get(&id) {
+            let max = self
+                .world
+                .get::<&Health>(entity)
+                .map(|h| h.max)
+                .unwrap_or(0.0);
+            if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
+                apply(&mut status, max);
+            }
+        }
+    }
+
+    fn alive_position(&self, id: u32) -> Option<Vec2> {
+        if !self.is_alive(id) {
+            return None;
+        }
+        let entity = *self.entities.get(&id)?;
+        self.world.get::<&Position>(entity).ok().map(|p| p.0)
+    }
+
+    fn taunter_of(&self, entity: Entity) -> Option<(u32, Vec2)> {
+        let status = self.world.get::<&Status>(entity).ok().map(|s| *s)?;
+        if status.taunt == 0 {
+            return None;
+        }
+        self.alive_position(status.taunt_by)
+            .map(|p| (status.taunt_by, p))
     }
 
     fn update_ai(&mut self) {
@@ -1136,7 +1424,17 @@ impl Simulation {
                 input.aim_y = home.y;
                 for slot in 0..3 {
                     let skill = self.config.skill(kind, slot);
-                    if matches!(skill.effect, SkillEffect::Heal | SkillEffect::Dash) {
+                    // 撤退：位移、回复、护盾、加速、隐身、坚守都可以保命
+                    if matches!(
+                        skill.effect,
+                        SkillEffect::Heal
+                            | SkillEffect::Dash
+                            | SkillEffect::Shield
+                            | SkillEffect::Regen
+                            | SkillEffect::Haste
+                            | SkillEffect::Stealth
+                    ) || (skill.effect == SkillEffect::Fortify && skill.radius <= 0.0)
+                    {
                         input.skills |= 1 << slot;
                     }
                 }
@@ -1150,21 +1448,50 @@ impl Simulation {
                     input.move_y = d.y;
                 }
                 input.attack = dist <= attack_range + target.radius + 10.0;
+                let hero_target = target.kind == EntityKind::Hero;
+                let allies_hurt = self.allies_hurt_near(&me, &metas, 340.0);
                 for slot in 0..3 {
                     let skill = self.config.skill(kind, slot);
                     let usable = match skill.effect {
-                        SkillEffect::Damage | SkillEffect::Stun | SkillEffect::Slow => {
-                            dist <= skill.range + skill.radius * 0.5
+                        SkillEffect::Damage
+                        | SkillEffect::Stun
+                        | SkillEffect::Slow
+                        | SkillEffect::Chain
+                        | SkillEffect::Cloud => dist <= skill.range + skill.radius * 0.5,
+                        SkillEffect::Pull => {
+                            dist <= skill.range + skill.radius * 0.5 && dist > attack_range * 0.6
                         }
                         SkillEffect::Nova => dist <= skill.radius * 0.9,
-                        SkillEffect::Dash => false,
-                        SkillEffect::Heal => me.hp < max_hp * 0.6,
+                        // 带伤害的突进：只对射程内的英雄出手
+                        SkillEffect::Dash => {
+                            hero_target
+                                && skill.damage > 0.0
+                                && dist <= skill.range + skill.radius * 0.5
+                                && dist > skill.radius * 0.4
+                        }
+                        SkillEffect::Heal => me.hp < max_hp * 0.6 || allies_hurt,
+                        SkillEffect::Regen => me.hp < max_hp * 0.75 || allies_hurt,
+                        SkillEffect::Summon => dist <= skill.range + 260.0,
+                        SkillEffect::Shield => {
+                            (hero_target && dist < 520.0) || me.hp < max_hp * 0.7 || allies_hurt
+                        }
+                        SkillEffect::Haste => hero_target && dist < 650.0,
+                        SkillEffect::Fortify => {
+                            if skill.radius > 0.0 {
+                                hero_target && dist <= skill.radius * 0.9
+                            } else {
+                                hero_target && dist < 420.0
+                            }
+                        }
+                        // 隐身接近：目标在普攻射程外时隐身靠近
+                        SkillEffect::Stealth => hero_target && dist > attack_range + 60.0,
                     };
                     // 只对英雄或成群魔兽交技能，避免浪费在单个小兵上。
                     if usable
-                        && (target.kind == EntityKind::Hero
+                        && (hero_target
                             || target.kind == EntityKind::Tower
-                            || slot == 0)
+                            || slot == 0
+                            || matches!(skill.effect, SkillEffect::Heal | SkillEffect::Regen))
                     {
                         input.skills |= 1 << slot;
                     }
@@ -1191,7 +1518,34 @@ impl Simulation {
         }
     }
 
+    /// 附近是否有残血队友（需要治疗/护盾）。
+    fn allies_hurt_near(&self, me: &Meta, metas: &[Meta], range: f32) -> bool {
+        metas.iter().any(|m| {
+            m.id != me.id
+                && m.team == me.team
+                && m.kind == EntityKind::Hero
+                && m.alive
+                && distance(m.position, me.position) <= range
+                && self
+                    .entities
+                    .get(&m.id)
+                    .and_then(|&e| {
+                        self.world
+                            .get::<&Health>(e)
+                            .ok()
+                            .map(|h| h.current < h.max * 0.55)
+                    })
+                    .unwrap_or(false)
+        })
+    }
+
     fn ai_pick_target(&self, me: &Meta, metas: &[Meta]) -> Option<Meta> {
+        // 被嘲讽时只能盯着嘲讽者
+        if let Some((taunter, _)) = self.taunter_of(me.entity) {
+            if let Some(t) = metas.iter().find(|m| m.id == taunter) {
+                return Some(*t);
+            }
+        }
         let aggro = self.config.hero.ai_aggro_range;
         let enemies = metas.iter().filter(|m| {
             m.team != me.team && m.alive && m.kind != EntityKind::PoisonZone && self.targetable(m)
@@ -1310,10 +1664,18 @@ impl Simulation {
                 continue;
             }
             let speed = self.config.hero_speed(kind) * status.speed_mul();
-            let direction = clamp_length(Vec2 {
+            let mut direction = clamp_length(Vec2 {
                 x: input.move_x,
                 y: input.move_y,
             });
+            // 被嘲讽：强制走向嘲讽者（停在贴身距离）
+            if let Some((_, at)) = self.taunter_of(entity) {
+                direction = if distance(at, position) > self.config.hero.radius * 2.5 {
+                    normalize(sub(at, position))
+                } else {
+                    Vec2::default()
+                };
+            }
             let delta = Vec2 {
                 x: direction.x * speed * DT,
                 y: direction.y * speed * DT,
@@ -1348,7 +1710,7 @@ impl Simulation {
             let stunned = self
                 .world
                 .get::<&Status>(entity)
-                .map(|s| s.stun > 0)
+                .map(|s| s.stun > 0 || s.taunt > 0)
                 .unwrap_or(false);
             if respawn > 0 || stunned || input.skills == 0 {
                 continue;
@@ -1401,7 +1763,35 @@ impl Simulation {
             entity: Some(id),
             bypass_shield: false,
         };
+        // 施放除隐身外的任何技能都会现身
+        if skill.effect != SkillEffect::Stealth {
+            if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
+                status.stealth = 0;
+            }
+        }
         match skill.effect {
+            SkillEffect::Chain => self.cast_chain(id, team, position, target, skill, source),
+            SkillEffect::Pull => self.cast_pull(id, team, position, target, skill, source),
+            SkillEffect::Summon => self.cast_summon(id, team, position, target, skill),
+            SkillEffect::Cloud => {
+                let ticks = seconds_to_ticks(skill.duration_seconds);
+                self.clouds.push(Cloud {
+                    team,
+                    source: id,
+                    center: target,
+                    radius: skill.radius,
+                    dps: skill.damage,
+                    slow: skill.amount.clamp(0.0, 0.9),
+                    total: ticks,
+                    left: ticks,
+                });
+                self.skill_event(id, team, position, target, skill.radius, &skill.name);
+            }
+            SkillEffect::Shield
+            | SkillEffect::Haste
+            | SkillEffect::Regen
+            | SkillEffect::Fortify
+            | SkillEffect::Stealth => self.cast_self_buff(id, team, position, skill),
             SkillEffect::Damage | SkillEffect::Stun | SkillEffect::Slow | SkillEffect::Nova => {
                 let center = if skill.effect == SkillEffect::Nova {
                     position
@@ -1547,6 +1937,291 @@ impl Simulation {
         }
     }
 
+    fn skill_event(&mut self, id: u32, team: Team, from: Vec2, to: Vec2, radius: f32, name: &str) {
+        self.event(EventKind::Skill, Some(team), from, to, radius, name);
+        if let Some(last) = self.events.last_mut() {
+            last.source = id;
+        }
+    }
+
+    /// 可被技能命中的敌方单位（存活、非毒区、可选中）。
+    fn enemy_units(&self, team: Team) -> Vec<Meta> {
+        self.metas()
+            .into_iter()
+            .filter(|m| {
+                m.team != team && m.alive && m.kind != EntityKind::PoisonZone && self.targetable(m)
+            })
+            .collect()
+    }
+
+    /// 连锁闪电：先命中落点附近最近的敌人（优先英雄），再依次弹向最近的未命中敌人。
+    fn cast_chain(
+        &mut self,
+        id: u32,
+        team: Team,
+        position: Vec2,
+        target: Vec2,
+        skill: &SkillConfig,
+        source: DamageSource,
+    ) {
+        let enemies = self.enemy_units(team);
+        let first_reach = (skill.radius * 0.5).max(90.0);
+        let first = enemies
+            .iter()
+            .filter(|m| distance(m.position, target) <= first_reach + m.radius)
+            .min_by(|a, b| {
+                let pa = u8::from(a.kind != EntityKind::Hero);
+                let pb = u8::from(b.kind != EntityKind::Hero);
+                pa.cmp(&pb)
+                    .then(distance(a.position, target).total_cmp(&distance(b.position, target)))
+                    .then(a.id.cmp(&b.id))
+            })
+            .copied();
+        let Some(first) = first else {
+            // 空放：仍然播放落点特效
+            self.skill_event(id, team, position, target, 60.0, &skill.name);
+            return;
+        };
+        let decay = if skill.amount > 0.0 {
+            skill.amount
+        } else {
+            1.0
+        };
+        let mut hit = vec![first.id];
+        let mut from = position;
+        let mut current = first;
+        let mut damage = skill.damage;
+        for bounce in 0..=skill.count {
+            let name = if bounce == 0 { skill.name.as_str() } else { "" };
+            self.skill_event(id, team, from, current.position, 55.0, name);
+            self.apply_damage(current.id, damage, source);
+            damage *= decay;
+            from = current.position;
+            let next = enemies
+                .iter()
+                .filter(|m| {
+                    !hit.contains(&m.id)
+                        && self.is_alive(m.id)
+                        && distance(m.position, from) <= skill.radius + m.radius
+                })
+                .min_by(|a, b| {
+                    distance(a.position, from)
+                        .total_cmp(&distance(b.position, from))
+                        .then(a.id.cmp(&b.id))
+                })
+                .copied();
+            match next {
+                Some(next) => {
+                    hit.push(next.id);
+                    current = next;
+                }
+                None => break,
+            }
+        }
+    }
+
+    /// 拉拽：落点范围内的敌人被拉向施法者，受到伤害并短暂眩晕。
+    fn cast_pull(
+        &mut self,
+        id: u32,
+        team: Team,
+        position: Vec2,
+        target: Vec2,
+        skill: &SkillConfig,
+        source: DamageSource,
+    ) {
+        let (width, height) = (self.config.world.width, self.config.world.height);
+        let victims: Vec<Meta> = self
+            .enemy_units(team)
+            .into_iter()
+            .filter(|m| {
+                matches!(m.kind, EntityKind::Hero | EntityKind::Minion)
+                    && distance(m.position, target) <= skill.radius + m.radius
+            })
+            .collect();
+        self.skill_event(id, team, position, target, skill.radius, &skill.name);
+        let stun = seconds_to_ticks(skill.duration_seconds);
+        for victim in victims {
+            if skill.damage > 0.0 {
+                self.apply_damage(victim.id, skill.damage, source);
+            }
+            let Some(&ve) = self.entities.get(&victim.id) else {
+                continue;
+            };
+            let immune = self
+                .world
+                .get::<&Status>(ve)
+                .map(|s| s.control_immune)
+                .unwrap_or(true);
+            if immune || !self.is_alive(victim.id) {
+                continue;
+            }
+            let gap = distance(victim.position, position)
+                - (self.config.hero.radius + victim.radius + 10.0);
+            let pull = skill.amount.min(gap.max(0.0));
+            if pull > 0.0 {
+                let dir = normalize(sub(position, victim.position));
+                let steps = 8;
+                let mut p = victim.position;
+                for _ in 0..steps {
+                    p = self.grid.slide(
+                        p,
+                        Vec2 {
+                            x: dir.x * pull / steps as f32,
+                            y: dir.y * pull / steps as f32,
+                        },
+                        width,
+                        height,
+                    );
+                }
+                self.set_component(ve, Position(p));
+            }
+            if skill.duration_seconds > 0.0 {
+                self.apply_control(victim.id, |s| s.stun = s.stun.max(stun));
+            }
+        }
+    }
+
+    /// 召唤随从：炮台（移速 0）原地驻守，狼灵/镜像跟随主人并主动接战。
+    fn cast_summon(
+        &mut self,
+        id: u32,
+        team: Team,
+        position: Vec2,
+        target: Vec2,
+        skill: &SkillConfig,
+    ) {
+        let at = if self.grid.is_blocked_at(target) {
+            position
+        } else {
+            target
+        };
+        let count = skill.count.clamp(1, 6);
+        let radius = if skill.summon_speed <= 0.0 {
+            22.0
+        } else {
+            18.0
+        };
+        let interval = seconds_to_ticks(self.config.wave.attack_seconds);
+        for index in 0..count {
+            let angle = index as f32 * std::f32::consts::TAU / count as f32;
+            let spread = if count > 1 { 40.0 } else { 0.0 };
+            let mut spot = Vec2 {
+                x: at.x + angle.cos() * spread,
+                y: at.y + angle.sin() * spread,
+            };
+            if self.grid.is_blocked_at(spot) {
+                spot = at;
+            }
+            let entity = self.spawn_entity(EntityKind::Minion, team, spot, skill.summon_hp, radius);
+            self.world
+                .insert(
+                    entity,
+                    (
+                        Minion { wave: 0 },
+                        MoveSpeed(skill.summon_speed.max(0.0)),
+                        Status::default(),
+                        Facing(if team == Team::Red {
+                            0.0
+                        } else {
+                            std::f32::consts::PI
+                        }),
+                        Combat {
+                            damage: skill.damage,
+                            range: if skill.summon_range > 0.0 {
+                                skill.summon_range
+                            } else {
+                                self.config.wave.range
+                            },
+                            interval,
+                            cooldown: 0,
+                            attacked_this_tick: false,
+                        },
+                        Summon {
+                            owner: id,
+                            ttl: seconds_to_ticks(skill.duration_seconds),
+                            label: skill.name.clone(),
+                        },
+                    ),
+                )
+                .expect("召唤物实体存在");
+        }
+        self.skill_event(id, team, position, at, 70.0, &skill.name);
+    }
+
+    /// 以自身为中心的增益：护盾 / 加速 / 治疗光环（友方英雄），坚守 / 隐身（自身）。
+    fn cast_self_buff(&mut self, id: u32, team: Team, position: Vec2, skill: &SkillConfig) {
+        let ticks = seconds_to_ticks(skill.duration_seconds);
+        let allies: Vec<u32> = self
+            .metas()
+            .into_iter()
+            .filter(|m| {
+                m.team == team
+                    && m.kind == EntityKind::Hero
+                    && m.alive
+                    && (m.id == id || distance(m.position, position) <= skill.radius)
+            })
+            .map(|m| m.id)
+            .collect();
+        match skill.effect {
+            SkillEffect::Shield => {
+                for ally in allies {
+                    self.apply_buff(ally, |s, max| {
+                        s.shield = s.shield.max(max * skill.amount);
+                        s.shield_ticks = s.shield_ticks.max(ticks);
+                    });
+                }
+            }
+            SkillEffect::Haste => {
+                for ally in allies {
+                    self.apply_buff(ally, |s, _| {
+                        s.haste = s.haste.max(ticks);
+                        s.haste_amount = s.haste_amount.max(skill.amount);
+                    });
+                }
+            }
+            SkillEffect::Regen => {
+                for ally in allies {
+                    self.apply_buff(ally, |s, _| {
+                        s.regen = ticks;
+                        s.regen_per_tick = skill.amount / ticks as f32;
+                    });
+                }
+            }
+            SkillEffect::Fortify => {
+                self.apply_buff(id, |s, _| {
+                    s.guard = s.guard.max(ticks);
+                    s.guard_amount = skill.amount.clamp(0.0, 0.9);
+                });
+                if skill.radius > 0.0 {
+                    let victims: Vec<u32> = self
+                        .enemy_units(team)
+                        .into_iter()
+                        .filter(|m| {
+                            matches!(m.kind, EntityKind::Hero | EntityKind::Minion)
+                                && distance(m.position, position) <= skill.radius + m.radius
+                        })
+                        .map(|m| m.id)
+                        .collect();
+                    for victim in victims {
+                        self.apply_control(victim, |s| {
+                            s.taunt = s.taunt.max(ticks);
+                            s.taunt_by = id;
+                        });
+                    }
+                }
+            }
+            SkillEffect::Stealth => {
+                self.apply_buff(id, |s, _| {
+                    s.stealth = ticks;
+                    s.stealth_amount = skill.amount;
+                });
+            }
+            _ => {}
+        }
+        self.skill_event(id, team, position, position, skill.radius, &skill.name);
+    }
+
     fn update_combat(&mut self) {
         let metas = self.metas();
         let (width, height) = (self.config.world.width, self.config.world.height);
@@ -1606,13 +2281,15 @@ impl Simulation {
                     else {
                         continue;
                     };
-                    if !input.attack {
+                    let taunter = self.taunter_of(entity);
+                    if !input.attack && taunter.is_none() {
                         continue;
                     }
-                    let aim = Vec2 {
+                    // 被嘲讽：普攻强制指向嘲讽者
+                    let aim = taunter.map(|(_, p)| p).unwrap_or(Vec2 {
                         x: input.aim_x,
                         y: input.aim_y,
-                    };
+                    });
                     // 普攻：射程内离瞄准点最近的敌人。
                     let target = metas
                         .iter()
@@ -1644,6 +2321,7 @@ impl Simulation {
                                     EntityKind::Hero | EntityKind::Minion | EntityKind::SuperMinion
                                 )
                                 && self.is_alive(m.id)
+                                && self.targetable(m)
                                 && distance(position, m.position) <= combat.range + m.radius
                         })
                         .min_by(|a, b| {
@@ -1667,7 +2345,22 @@ impl Simulation {
                         .iter()
                         .find(|m| m.kind == EntityKind::Base && m.team != attacker.team)
                         .copied();
-                    let target = if is_super {
+                    let summon_owner = self.world.get::<&Summon>(entity).ok().map(|s| s.owner);
+                    // 召唤物（尤其是远程炮台）的索敌范围不小于其射程
+                    let aggro = if summon_owner.is_some() {
+                        aggro.max(combat.range + 40.0)
+                    } else {
+                        aggro
+                    };
+                    let taunted = if is_super {
+                        None
+                    } else {
+                        self.taunter_of(entity)
+                            .and_then(|(t, _)| metas.iter().find(|m| m.id == t).copied())
+                    };
+                    let target = if let Some(taunter) = taunted {
+                        Some(taunter)
+                    } else if is_super {
                         // 超级双头魔兽：无视一切，只攻击敌方基地。
                         enemy_base
                             .filter(|b| distance(position, b.position) <= combat.range + b.radius)
@@ -1717,6 +2410,21 @@ impl Simulation {
                         }
                     }
                     if !moved {
+                        if let Some(owner) = summon_owner {
+                            // 召唤物无目标时跟随主人
+                            let follow = self
+                                .alive_position(owner)
+                                .filter(|p| distance(*p, position) > 140.0);
+                            match follow {
+                                Some(p) => {
+                                    let dir =
+                                        self.move_dir_toward(position, p, attacker.team, true);
+                                    self.move_unit(entity, position, dir, width, height);
+                                }
+                                None => self.set_component(entity, Velocity::default()),
+                            }
+                            continue;
+                        }
                         let dir = self.lane_flow(attacker.team).direction(position);
                         let near_goal = enemy_base
                             .map(|b| {
@@ -1787,6 +2495,18 @@ impl Simulation {
             c.cooldown = c.interval;
             c.attacked_this_tick = true;
         }
+        // 普攻会解除隐身
+        if let Ok(mut status) = self.world.get::<&mut Status>(attacker.entity) {
+            status.stealth = 0;
+        }
+        // 召唤物的伤害与击杀记在主人名下
+        let credit = self
+            .world
+            .get::<&Summon>(attacker.entity)
+            .ok()
+            .map(|s| s.owner)
+            .filter(|owner| self.entities.contains_key(owner))
+            .unwrap_or(attacker.id);
         self.set_component(
             attacker.entity,
             Facing(angle(sub(target.position, position))),
@@ -1808,7 +2528,7 @@ impl Simulation {
             combat.damage,
             DamageSource {
                 team: Some(attacker.team),
-                entity: Some(attacker.id),
+                entity: Some(credit),
                 bypass_shield: bypass,
             },
         );
@@ -1978,13 +2698,36 @@ impl Simulation {
         if kind == EntityKind::Base && !source.bypass_shield && self.is_base_invulnerable(team) {
             return false;
         }
+        if self
+            .world
+            .get::<&Health>(entity)
+            .map(|h| h.current <= 0.0)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+        // 减伤与护盾
+        let mut damage = damage;
+        if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
+            if status.guard > 0 {
+                damage *= (1.0 - status.guard_amount).clamp(0.1, 1.0);
+            }
+            if status.shield_ticks > 0 && status.shield > 0.0 {
+                let absorbed = status.shield.min(damage);
+                status.shield -= absorbed;
+                damage -= absorbed;
+                if status.shield <= 0.0 {
+                    status.shield_ticks = 0;
+                }
+            }
+        }
+        if damage <= 0.0 {
+            return true;
+        }
         let (before, after) = {
             let Ok(mut health) = self.world.get::<&mut Health>(entity) else {
                 return false;
             };
-            if health.current <= 0.0 {
-                return false;
-            }
             let before = health.current;
             health.current = (health.current - damage).max(0.0);
             (before, health.current)
@@ -2010,9 +2753,12 @@ impl Simulation {
         }
         match kind {
             EntityKind::Hero => {
-                let respawn = self.config.world.respawn_seconds * TICK_RATE;
+                // 复活时间按队伍累计阵亡次数翻倍：第 n 次阵亡 = base * multiplier^(n-1) 秒
+                let index = team_index(team);
+                self.team_deaths[index] = self.team_deaths[index].saturating_add(1);
+                let respawn = self.config.world.respawn_ticks(self.team_deaths[index]);
                 if let Ok(mut hero) = self.world.get::<&mut HeroState>(entity) {
-                    hero.respawn = respawn.max(1);
+                    hero.respawn = respawn;
                     hero.queue.clear();
                     hero.input.attack = false;
                     hero.input.skills = 0;
@@ -2201,7 +2947,7 @@ impl Simulation {
     }
 
     fn targetable(&self, meta: &Meta) -> bool {
-        !(meta.kind == EntityKind::Base && self.is_base_invulnerable(meta.team))
+        !meta.stealth && !(meta.kind == EntityKind::Base && self.is_base_invulnerable(meta.team))
     }
 
     fn metas(&self) -> Vec<Meta> {
@@ -2215,10 +2961,11 @@ impl Simulation {
                 &Health,
                 &Radius,
                 Option<&HeroState>,
+                Option<&Status>,
             )>()
             .iter()
             .map(
-                |(entity, (id, kind, team, position, health, radius, hero))| Meta {
+                |(entity, (id, kind, team, position, health, radius, hero, status))| Meta {
                     id: id.0,
                     entity,
                     kind: kind.0,
@@ -2227,6 +2974,7 @@ impl Simulation {
                     hp: health.current,
                     radius: radius.0,
                     alive: health.current > 0.0 && hero.map(|h| h.respawn == 0).unwrap_or(true),
+                    stealth: status.map(|s| s.stealth > 0).unwrap_or(false),
                 },
             )
             .collect();
@@ -2278,6 +3026,20 @@ impl Simulation {
         if hero.as_ref().map(|h| h.ai).unwrap_or(false) {
             bits |= flags::AI;
         }
+        if status.stealth > 0 {
+            bits |= flags::STEALTH;
+        }
+        if status.shield_ticks > 0 && status.shield > 0.0 {
+            bits |= flags::SHIELDED;
+        }
+        if status.taunt > 0 {
+            bits |= flags::TAUNTED;
+        }
+        let summon_label = self
+            .world
+            .get::<&Summon>(entity)
+            .ok()
+            .map(|s| s.label.clone());
         let level = match kind {
             EntityKind::Minion => self
                 .world
@@ -2303,15 +3065,12 @@ impl Simulation {
             radius,
             hero: hero.as_ref().map(|h| h.kind),
             owner: hero.as_ref().and_then(|h| h.owner),
-            name: hero.as_ref().map(|h| h.name.clone()),
+            name: hero.as_ref().map(|h| h.name.clone()).or(summon_label),
             cooldowns: hero
                 .as_ref()
                 .map(|h| h.cooldowns.map(|v| v.min(u16::MAX as u32) as u16))
                 .unwrap_or([0; 3]),
-            respawn: hero
-                .as_ref()
-                .map(|h| h.respawn.min(u16::MAX as u32) as u16)
-                .unwrap_or(0),
+            respawn: hero.as_ref().map(|h| h.respawn).unwrap_or(0),
             facing: (facing * 100.0).round() / 100.0,
             attacking,
             flags: bits,

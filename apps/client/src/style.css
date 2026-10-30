@@ -180,3 +180,13 @@
   .touch-mode .hud-tip{display:none}
   .touch-mode .coach{top:52px}
 }
+/* 20 名玩偶：自适应网格 + 面板内滚动（桌面 / 手机竖屏 / 手机横屏都能选） */
+.hero-select{grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px;max-height:206px;overflow-y:auto;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;padding:2px 5px 2px 1px;scrollbar-width:thin;scrollbar-color:#8a72b088 transparent}
+.hero-select::-webkit-scrollbar{width:6px}.hero-select::-webkit-scrollbar-thumb{background:#8a72b077;border-radius:3px}
+.hero-select .hero-option{height:78px;min-width:0}
+.hero-select .hero-portrait img{width:56px;height:50px}
+.hero-select .hero-option b{white-space:nowrap}
+.hero-select .hero-option small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+@media(max-width:520px){.hero-select{grid-template-columns:repeat(4,minmax(0,1fr));max-height:250px}.hero-select .hero-option{height:70px}.hero-select .hero-portrait img{width:46px;height:42px}}
+@media(max-height:560px) and (orientation:landscape){.hero-select{grid-template-columns:repeat(auto-fill,minmax(68px,1fr));max-height:168px;gap:5px}.hero-select .hero-option{height:60px;padding:5px 2px}.hero-select .hero-portrait img{width:40px;height:36px}.hero-select .hero-option small{display:none}.hero-select .hero-option b{font-size:10px}}
+@media(min-height:1000px) and (min-width:851px){.hero-select{max-height:292px}}

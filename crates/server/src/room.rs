@@ -96,11 +96,17 @@ struct Room {
 pub fn spawn_room(id: u64, name: String, ctx: RoomContext, registry: RegistryHandle) -> RoomHandle {
     let (tx, rx) = mpsc::channel(1024);
     let (broadcast, _) = broadcast::channel(64);
-    let log = MatchLog::open(&ctx.server.log_dir, &name, id, &ctx.game);
+    // 每局不同的随机种子（AI 选人、兵波站位），写进日志 header 以便回放复现
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+        ^ id.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    let log = MatchLog::open(&ctx.server.log_dir, &name, id, &ctx.game, seed);
     let room = Room {
         id,
         name: name.clone(),
-        sim: Simulation::new((*ctx.game).clone()),
+        sim: Simulation::with_seed((*ctx.game).clone(), seed),
         ctx,
         registry,
         players: HashMap::new(),

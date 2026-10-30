@@ -8,7 +8,7 @@
 
 use shared::{encode, ClientMessage, ServerMessage, Welcome, PROTOCOL_VERSION, TICK_RATE};
 use sim::{GameConfig, Simulation};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 const LOCAL_PLAYER: u64 = 1;
 
@@ -21,6 +21,13 @@ struct Instance {
 thread_local! {
     static INSTANCE: RefCell<Option<Instance>> = const { RefCell::new(None) };
     static OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static SEED: Cell<u64> = const { Cell::new(sim::DEFAULT_SEED) };
+}
+
+/// 设置下一局的随机种子（影响 AI 选人与兵波站位）。宿主可在 Join 之前调用，可选。
+#[no_mangle]
+pub extern "C" fn mdtr_seed(lo: u32, hi: u32) {
+    SEED.with(|s| s.set(u64::from(lo) | (u64::from(hi) << 32)));
 }
 
 fn set_out(bytes: Vec<u8>) {
@@ -82,7 +89,7 @@ pub extern "C" fn mdtr_send(ptr: *const u8, len: usize) {
         let mut slot = cell.borrow_mut();
         match message {
             ClientMessage::Join(join) => {
-                let mut sim = Simulation::new(GameConfig::default());
+                let mut sim = Simulation::with_seed(GameConfig::default(), SEED.with(Cell::get));
                 let result = sim.add_player(LOCAL_PLAYER, &join.name, join.team, join.hero);
                 match result {
                     Ok((entity_id, team)) => {

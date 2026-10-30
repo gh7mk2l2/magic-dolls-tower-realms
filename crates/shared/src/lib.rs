@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const TICK_RATE: u32 = 20;
 
 /// 实体状态位（`EntitySnapshot::flags`）。
@@ -21,6 +21,12 @@ pub mod flags {
     pub const CONTROL_IMMUNE: u8 = 1 << 3;
     /// 由 AI 托管（含断线托管）。
     pub const AI: u8 = 1 << 4;
+    /// 隐身（敌方不可选中；客户端对敌方隐藏、对友方半透明）。
+    pub const STEALTH: u8 = 1 << 5;
+    /// 拥有护盾（吸收伤害）。
+    pub const SHIELDED: u8 = 1 << 6;
+    /// 被嘲讽（强制走向嘲讽者，无法施法）。
+    pub const TAUNTED: u8 = 1 << 7;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -56,16 +62,44 @@ pub enum HeroKind {
     Assassin,
     Priestess,
     Brawler,
+    Stormcaller,
+    FrostWitch,
+    Artificer,
+    Paladin,
+    Alchemist,
+    Windblade,
+    Starshooter,
+    Nightshade,
+    Colossus,
+    Chronomancer,
+    FlameDancer,
+    Bard,
+    Beastmaster,
+    Mirage,
 }
 
 impl HeroKind {
-    pub const ALL: [HeroKind; 6] = [
+    pub const ALL: [HeroKind; 20] = [
         HeroKind::Arcanist,
         HeroKind::Ranger,
         HeroKind::Guardian,
         HeroKind::Assassin,
         HeroKind::Priestess,
         HeroKind::Brawler,
+        HeroKind::Stormcaller,
+        HeroKind::FrostWitch,
+        HeroKind::Artificer,
+        HeroKind::Paladin,
+        HeroKind::Alchemist,
+        HeroKind::Windblade,
+        HeroKind::Starshooter,
+        HeroKind::Nightshade,
+        HeroKind::Colossus,
+        HeroKind::Chronomancer,
+        HeroKind::FlameDancer,
+        HeroKind::Bard,
+        HeroKind::Beastmaster,
+        HeroKind::Mirage,
     ];
 }
 
@@ -86,6 +120,8 @@ pub enum EventKind {
     HelpRequest,
     /// 队友接受求救：source=接受者实体，target=求救者实体，text=接受者名字。
     HelpAccepted,
+    /// 持续性区域（毒云/火海）的脉冲：(x,y)=中心，value=半径，source=施法者。
+    Zone,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -152,8 +188,8 @@ pub struct EntitySnapshot {
     pub name: Option<String>,
     /// 剩余冷却（tick）。
     pub cooldowns: [u16; 3],
-    /// 剩余复活时间（tick），0 表示存活。
-    pub respawn: u16,
+    /// 剩余复活时间（tick），0 表示存活。复活时间按队伍阵亡次数翻倍，可能很长，故用 u32。
+    pub respawn: u32,
     pub facing: f32,
     pub attacking: bool,
     pub flags: u8,

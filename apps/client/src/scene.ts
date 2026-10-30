@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { ArcaneAudio } from './audio';
-import { TEAM_COLORS, teamNames, applyTeamNames } from './config';
-import { Rig, hasRig, registerRigFrames, type RigName } from './rig';
+import { SELF_CAST_EFFECTS, BUFF_EFFECTS, TEAM_COLORS, teamNames, applyTeamNames } from './config';
+import { Rig, hasRig, registerRigFrames, type AtlasName } from './rig';
+import { heroLook } from './heroArt';
 import { Interpolator, SnapshotStore } from './interpolation';
 import type { GameConnection } from './network';
 import { NavGrid, Predictor } from './prediction';
@@ -378,6 +379,7 @@ export class BattleScene extends Phaser.Scene {
     for (const e of this.store.entities.values()) {
       if (e.team === local.team || e.kind === 'PoisonZone' || e.hp <= 0 || e.respawn > 0) continue;
       if (e.kind === 'Base' && e.flags & FLAGS.INVULNERABLE) continue;
+      if (e.flags & FLAGS.STEALTH) continue;
       const d = Math.hypot(e.x - local.x, e.y - local.y) - (e.kind === 'Hero' ? 120 : 0);
       if (d < bestD) { bestD = d; best = e; }
     }
@@ -548,11 +550,13 @@ export class BattleScene extends Phaser.Scene {
         const shadow = this.add.image(0, 2, 'shadow').setScale(0.6).setAlpha(0.8);
         const ring = this.add.graphics();
         ring.lineStyle(isLocal ? 3 : 2, isLocal ? 0xfff2b0 : color, isLocal ? 0.9 : 0.6).strokeEllipse(0, 2, 62, 22);
-        view.body = this.add.image(0, 0, `hero-${e.hero ?? 'Arcanist'}-${e.team}`).setOrigin(0.5, 0.88).setScale(0.82);
+        const look = heroLook(e.hero);
+        view.body = this.add.image(0, 0, `hero-${look.portrait}-${e.team}`).setOrigin(0.5, 0.88).setScale(0.82);
+        if (look.tint !== null) view.body.setTint(look.tint);
         view.bar = this.add.graphics();
         view.label = this.add.text(0, -122, e.name ?? '', { fontFamily: 'Noto Sans SC, Microsoft YaHei, sans-serif', fontSize: isLocal ? '16px' : '14px', fontStyle: isLocal ? 'bold' : 'normal', color: isLocal ? '#fff2c4' : e.team === this.deps.welcome.team ? '#d8f5e6' : '#ffd9de', stroke: '#05070d', strokeThickness: 4 }).setOrigin(0.5);
         view.status = this.add.text(0, -140, '', { fontSize: '16px', color: '#ffe27a', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5);
-        const heroRig = this.makeRig(view, (e.hero ?? 'Arcanist') as RigName, e.team, e.hero === 'Brawler' ? 88 : 108);
+        const heroRig = this.makeRig(view, look.atlas, e.team, look.height, look.anim, look.tint);
         if (!heroRig) this.attachLegs(view, root, 0.82);
         root.add([shadow, ring, ...(heroRig ? [heroRig.root] : [...(view.legs ?? []), view.body]), view.bar, view.label, view.status]);
         break;
@@ -561,9 +565,16 @@ export class BattleScene extends Phaser.Scene {
         const shadow = this.add.image(0, 2, 'shadow').setScale(0.38).setAlpha(0.7);
         view.body = this.add.image(0, 0, `minion-${e.team}`).setOrigin(0.5, 0.88).setScale(Math.min(0.85, 0.62 + e.level * 0.015));
         view.bar = this.add.graphics();
-        const minionRig = this.makeRig(view, 'minion', e.team, 40 + Math.min(10, e.level * 0.8));
+        // 技能召唤物（炮台/狼灵/镜像）带名字：金色描边 + 名字标签，与兵波魔兽区分
+        const summoned = !!e.name;
+        const minionRig = this.makeRig(view, 'minion', e.team, summoned ? 46 : 40 + Math.min(10, e.level * 0.8), undefined, summoned ? 0xfff0b8 : null);
         if (!minionRig) this.attachLegs(view, root, view.body.scaleX);
-        root.add([shadow, ...(minionRig ? [minionRig.root] : [...(view.legs ?? []), view.body]), view.bar]);
+        const parts: Phaser.GameObjects.GameObject[] = [shadow, ...(minionRig ? [minionRig.root] : [...(view.legs ?? []), view.body]), view.bar];
+        if (summoned) {
+          const tag = this.add.text(0, -62, e.name ?? '', { fontFamily: 'Noto Sans SC, Microsoft YaHei, sans-serif', fontSize: '11px', color: '#ffe9a8', stroke: '#05070d', strokeThickness: 3 }).setOrigin(0.5);
+          parts.push(tag);
+        }
+        root.add(parts);
         break;
       }
       case 'SuperMinion': {
@@ -595,6 +606,11 @@ export class BattleScene extends Phaser.Scene {
     const dead = e.respawn > 0 || e.hp <= 0;
     view.root.setVisible(!dead);
     if (dead) return;
+    // 隐身：友方（含自己）半透明，敌方完全隐藏
+    if (e.kind === 'Hero') {
+      const stealth = (e.flags & FLAGS.STEALTH) !== 0;
+      view.root.setAlpha(stealth ? (e.team === this.deps.welcome.team ? 0.42 : 0) : 1);
+    }
     const moving = Math.hypot(e.vx, e.vy) > 5 || (isLocal && (this.keys.W.isDown || this.keys.A.isDown || this.keys.S.isDown || this.keys.D.isDown));
     if (view.body || view.rig) {
       if (view.rig) this.animateRig(view, e, moving, now, delta);
@@ -607,7 +623,7 @@ export class BattleScene extends Phaser.Scene {
         for (const part of [...(view.body ? [view.body] : []), ...(view.legs ?? [])]) {
           if (e.flags & FLAGS.SLOWED) part.setTint(0x9fd8ff); else part.clearTint();
         }
-        if (view.status) view.status.setText(e.flags & FLAGS.STUNNED ? '✦ 眩晕 ✦' : e.flags & FLAGS.SLOWED ? '❄' : '');
+        if (view.status) view.status.setText(e.flags & FLAGS.STUNNED ? '✦ 眩晕 ✦' : e.flags & FLAGS.TAUNTED ? '❗ 嘲讽' : e.flags & FLAGS.SLOWED ? '❄' : e.flags & FLAGS.SHIELDED ? '⛨' : '');
       }
     }
     if (e.kind === 'Base') {
@@ -638,9 +654,9 @@ export class BattleScene extends Phaser.Scene {
   // ---------------------------------------------------------------- 走路动画
 
   /** 用关节拆分的骨骼替换整张贴图；body 保留但隐藏（不加入容器），供旧逻辑兜底。 */
-  private makeRig(view: View, name: RigName, team: Team, height: number): Rig | null {
+  private makeRig(view: View, name: AtlasName, team: Team, height: number, anim?: string, tint: number | null = null): Rig | null {
     if (!hasRig(this, name, team)) return null;
-    const rig = new Rig(this, name, team, height);
+    const rig = new Rig(this, name, team, height, anim, tint);
     view.rig = rig;
     view.body?.destroy();
     view.body = undefined;
@@ -828,8 +844,8 @@ export class BattleScene extends Phaser.Scene {
       g.fillStyle(color, 0.05).fillCircle(local.x, local.y, info.range);
       g.lineStyle(2, color, 0.45).strokeCircle(local.x, local.y, info.range);
     }
-    if (info.effect === 'nova' || info.effect === 'heal') {
-      const c = info.effect === 'heal' && !cancel ? 0x8dff9a : color;
+    if (SELF_CAST_EFFECTS.has(info.effect)) {
+      const c = BUFF_EFFECTS.has(info.effect) && !cancel ? 0x8dff9a : color;
       g.fillStyle(c, 0.14 * pulse).fillCircle(local.x, local.y, info.radius);
       g.lineStyle(3, c, 0.8).strokeCircle(local.x, local.y, info.radius);
     } else if (info.effect === 'dash') {
@@ -1094,6 +1110,14 @@ export class BattleScene extends Phaser.Scene {
         if (onScreen) this.burst(e.x, e.y - 40, 0xffffff, 26);
         hud.feed(e.text, e.team);
         if (e.target === localId) { audio.play('Death'); cam.shake(200, 0.006); }
+        break;
+      case 'Zone':
+        // 持续区域脉冲：淡淡的地面圈，不播音效
+        if (onScreen) {
+          const tint = e.team ? TEAM_COLORS[e.team] : 0xffffff;
+          this.ringFx(e.x, e.y, e.value, tint, 700);
+          this.burst(e.x, e.y - 10, tint, 6);
+        }
         break;
       case 'Respawn':
         if (onScreen) { this.ringFx(e.x, e.y, 90, 0xfff0b0); }

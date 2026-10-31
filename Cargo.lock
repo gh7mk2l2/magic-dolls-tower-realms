@@ -1272,6 +1272,7 @@ version = "0.1.0"
 dependencies = [
  "hecs",
  "serde",
+ "serde_json",
  "shared",
  "toml",
 ]

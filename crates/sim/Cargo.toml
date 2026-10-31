@@ -9,3 +9,6 @@ shared.workspace = true
 serde.workspace = true
 hecs = "0.10"
 toml = "0.8"
+
+[dev-dependencies]
+serde_json = "1"

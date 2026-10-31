@@ -65,7 +65,7 @@ export const HEROES: Record<HeroKind, HeroVisual> = {
     name: '冰晶女巫', title: '法师玩偶 · 减速冻结', color: 0x9be8ff, css: '#a2ecff', icon: '❄',
     lore: '冰晶瓷偶，冰锥迟滞敌人，寒冰将其冻结原地。',
     skills: ['冰锥', '寒冰禁锢', '极寒风暴'], icons: ['❅', '❄', '✲'],
-    desc: ['掷出冰锥，造成 115 点伤害并减速 35%，持续 2 秒。', '冻结指定位置的敌人，造成 70 点伤害并冻结 1.4 秒。', '在指定位置召唤 4 秒冰暴，每秒 75 点伤害并减速 50%。'],
+    desc: ['掷出冰锥，造成 125 点伤害并减速 35%，持续 2 秒。', '冻结指定位置的敌人，造成 70 点伤害并冻结 1.4 秒。', '在指定位置召唤 4 秒冰暴，每秒 75 点伤害并减速 50%。'],
     art: 'frostwitch', base: 'Priestess', tint: 0xc4f0ff, filter: 'hue-rotate(110deg) saturate(1.2)',
   },
   Artificer: {
@@ -100,7 +100,7 @@ export const HEROES: Record<HeroKind, HeroVisual> = {
     name: '星辰射手', title: '射手玩偶 · 远程爆发', color: 0xd4b8ff, css: '#d9c0ff', icon: '✧',
     lore: '以星屑填充的弓手玩偶，箭矢自天穹坠落。',
     skills: ['星光穿刺', '星跃', '陨星坠落'], icons: ['✧', '»', '☄'],
-    desc: ['射出星光箭，远距离落点范围内敌人受到 135 点伤害。', '朝瞄准方向跃迁 260 距离。', '召唤陨星砸向 760 距离内的落点，范围内敌人受到 320 点伤害。'],
+    desc: ['射出星光箭，远距离落点范围内敌人受到 150 点伤害并减速 25%，持续 1.5 秒。', '朝瞄准方向跃迁 260 距离。', '召唤陨星砸向 760 距离内的落点，范围内敌人受到 320 点伤害。'],
     art: 'starshot', base: 'Ranger', tint: 0xe6d8ff, filter: 'hue-rotate(110deg) saturate(1.2)',
   },
   Nightshade: {
@@ -128,7 +128,7 @@ export const HEROES: Record<HeroKind, HeroVisual> = {
     name: '烈焰舞姬', title: '法师玩偶 · 范围火焰', color: 0xff6a4a, css: '#ff7656', icon: '♨',
     lore: '缎带燃着火焰的舞姬人偶，每一步都留下火海。',
     skills: ['火焰扇', '炽焰火海', '焚天之舞'], icons: ['♨', '△', '✹'],
-    desc: ['挥出火焰扇，落点范围内敌人受到 125 点伤害。', '在指定位置点燃 3 秒火海，每秒 60 点伤害。', '旋舞引爆烈焰，周围 260 范围内敌人受到 210 点伤害。'],
+    desc: ['挥出火焰扇，落点范围内敌人受到 125 点伤害。', '在指定位置点燃 3 秒火海，每秒 70 点伤害。', '旋舞引爆烈焰，周围 260 范围内敌人受到 210 点伤害。'],
     art: 'flamedancer', base: 'Priestess', tint: 0xffc8b4, filter: 'hue-rotate(-110deg) saturate(1.5)',
   },
   Bard: {
@@ -142,7 +142,7 @@ export const HEROES: Record<HeroKind, HeroVisual> = {
     name: '狼灵猎手', title: '猎手玩偶 · 召唤狼灵', color: 0xc58a5a, css: '#cc9464', icon: '❂',
     lore: '披着兽皮的猎手玩偶，号角一响，狼灵随行。',
     skills: ['裂爪撕咬', '狼灵召唤', '群狼猎杀'], icons: ['⚔', '♞', '☽'],
-    desc: ['撕咬前方，落点范围内敌人受到 120 点伤害。', '召唤 2 只狼灵（300 生命，30 攻击）跟随作战，持续 10 秒。', '召唤 3 只强化狼灵（380 生命，40 攻击），持续 12 秒。'],
+    desc: ['撕咬前方，落点范围内敌人受到 120 点伤害。', '召唤 2 只狼灵（260 生命，30 攻击）跟随作战，持续 10 秒。', '召唤 3 只强化狼灵（320 生命，34 攻击），持续 12 秒。'],
     art: 'beastmaster', base: 'Brawler', tint: 0xf0d2b8, filter: 'hue-rotate(10deg) saturate(0.8)',
   },
   Mirage: {

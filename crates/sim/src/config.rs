@@ -30,6 +30,9 @@ pub struct WorldConfig {
     /// 复活时间倍数（默认 2：1、2、4、8…秒）。
     #[serde(default = "two_u32")]
     pub respawn_multiplier: u32,
+    /// 可选：单次复活时间上限（秒），0 = 不设上限（默认，保持纯翻倍规则）。
+    #[serde(default)]
+    pub respawn_max_secs: u32,
     pub ai_fill_to: usize,
     pub max_team_size: usize,
 }
@@ -71,6 +74,11 @@ impl WorldConfig {
         let ticks = u64::from(self.respawn_base_secs)
             .saturating_mul(u64::from(TICK_RATE))
             .saturating_mul(factor);
+        let ticks = if self.respawn_max_secs > 0 {
+            ticks.min(u64::from(self.respawn_max_secs) * u64::from(TICK_RATE))
+        } else {
+            ticks
+        };
         u32::try_from(ticks).unwrap_or(u32::MAX).max(1)
     }
 }

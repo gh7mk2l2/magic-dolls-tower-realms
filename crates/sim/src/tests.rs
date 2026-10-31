@@ -1098,9 +1098,28 @@ fn balance_report() {
         deaths: u32,
         damage: f32,
     }
+    let offset: u64 = std::env::var("BALANCE_OFFSET")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    // 可选：逐局 JSONL 输出（供脚本汇总多进程结果）
+    let mut out = std::env::var("BALANCE_OUT")
+        .ok()
+        .and_then(|p| std::fs::File::create(p).ok());
+    // 可选：BALANCE_CONFIG=<toml> 试验另一份数值，BALANCE_RESPAWN_CAP=<秒> 试验复活上限
+    let mut base_config = std::env::var("BALANCE_CONFIG")
+        .ok()
+        .map(|p| GameConfig::from_toml(&std::fs::read_to_string(p).unwrap()).unwrap())
+        .unwrap_or_default();
+    if let Some(cap) = std::env::var("BALANCE_RESPAWN_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+    {
+        base_config.world.respawn_max_secs = cap;
+    }
     let mut rows: BTreeMap<HeroKind, Row> = BTreeMap::new();
     let mut total_ticks = 0u64;
-    for m in 0..matches {
+    for m in offset..offset + matches {
         // 确定性洗牌，保证每个玩偶出场次数接近
         let mut rng = DeterministicRng(0x9e37_79b9_7f4a_7c15 ^ (m + 1).wrapping_mul(0x2545_f491));
         let mut pool = HeroKind::ALL.to_vec();
@@ -1108,15 +1127,56 @@ fn balance_report() {
             let j = ((rng.next_f32() * (i + 1) as f32) as usize).min(i);
             pool.swap(i, j);
         }
-        let mut sim = Simulation::with_seed(GameConfig::default(), m + 1);
+        let mut sim = Simulation::with_seed(base_config.clone(), m + 1);
         sim.set_ai_lineup(Team::Red, &pool[0..4]);
         sim.set_ai_lineup(Team::Blue, &pool[4..8]);
         let limit =
             (sim.config.world.match_seconds + sim.config.sudden_death.max_seconds + 5) * TICK_RATE;
+        let mut max_respawn = 0u32;
+        let mut all_dead_ticks = [0u32; 2];
+        let mut sudden_tick = 0u32;
         while !sim.is_over() && sim.tick() < limit {
             sim.step();
+            if sudden_tick == 0 && sim.phase() == Phase::SuddenDeath {
+                sudden_tick = sim.tick();
+            }
+            if sim.tick().is_multiple_of(TICK_RATE) {
+                for team in [Team::Red, Team::Blue] {
+                    let ids = sim.hero_ids(Some(team));
+                    let mut dead = 0;
+                    for id in &ids {
+                        if let Some(h) = sim.hero_state(*id) {
+                            max_respawn = max_respawn.max(h.respawn);
+                            if h.respawn > 0 {
+                                dead += 1;
+                            }
+                        }
+                    }
+                    if dead == ids.len() && dead > 0 {
+                        all_dead_ticks[team_index(team)] += TICK_RATE;
+                    }
+                }
+            }
         }
         let summary = sim.summary();
+        if let Some(file) = out.as_mut() {
+            use std::io::Write;
+            let line = serde_json::json!({
+                "m": m,
+                "winner": summary.winner.map(|w| format!("{w:?}")),
+                "ticks": summary.ticks,
+                "sudden": sudden_tick,
+                "deaths": [sim.team_deaths(Team::Red), sim.team_deaths(Team::Blue)],
+                "max_respawn_s": max_respawn / TICK_RATE,
+                "all_dead_s": [all_dead_ticks[0] / TICK_RATE, all_dead_ticks[1] / TICK_RATE],
+                "towers": [summary.towers_destroyed_red, summary.towers_destroyed_blue],
+                "players": summary.players.iter().map(|p| serde_json::json!({
+                    "hero": format!("{:?}", p.hero), "team": format!("{:?}", p.team),
+                    "k": p.kills, "d": p.deaths, "dmg": p.damage,
+                })).collect::<Vec<_>>(),
+            });
+            let _ = writeln!(file, "{line}");
+        }
         total_ticks += summary.ticks as u64;
         for p in &summary.players {
             let row = rows.entry(p.hero).or_default();
@@ -1139,7 +1199,7 @@ fn balance_report() {
         "{:<12} {:>4} {:>7} {:>7} {:>7} {:>6} {:>9}",
         "玩偶", "局", "胜率", "场均K", "场均D", "K/D", "场均伤害"
     );
-    let config = GameConfig::default();
+    let config = base_config;
     let mut sorted: Vec<_> = rows.into_iter().collect();
     sorted.sort_by(|a, b| {
         let wa = a.1.wins as f32 / a.1.games.max(1) as f32;
@@ -1356,4 +1416,45 @@ fn config_rejects_nan_and_negative_skill_numbers() {
     assert_ne!(bad, BUILTIN_CONFIG);
     assert!(GameConfig::from_toml(&bad).is_err());
     assert!(GameConfig::from_toml(BUILTIN_CONFIG).is_ok());
+}
+
+#[test]
+fn respawn_cap_is_optional_and_off_by_default() {
+    let mut world = GameConfig::default().world;
+    assert_eq!(world.respawn_max_secs, 0, "默认不设上限");
+    assert_eq!(world.respawn_ticks(14), 8192 * TICK_RATE);
+    world.respawn_max_secs = 30;
+    assert_eq!(world.respawn_ticks(3), 4 * TICK_RATE);
+    assert_eq!(world.respawn_ticks(6), 30 * TICK_RATE);
+    assert_eq!(world.respawn_ticks(u32::MAX), 30 * TICK_RATE);
+}
+
+#[test]
+fn expired_status_strength_does_not_leak_into_next_effect() {
+    let mut sim = quiet();
+    let (me, _) = sim
+        .add_player(1, "测", Some(Team::Red), HeroKind::Guardian)
+        .unwrap();
+    let e = sim.entities[&me];
+    sim.apply_control(me, |s| {
+        s.slow = 2;
+        s.slow_amount = 0.5;
+    });
+    for _ in 0..3 {
+        sim.step();
+    }
+    let st = *sim.world.get::<&Status>(e).unwrap();
+    assert_eq!(st.slow, 0);
+    assert_eq!(st.slow_amount, 0.0, "过期减速强度清零");
+    // 弱减速覆盖在强减速生效期间时，取最强
+    sim.apply_control(me, |s| {
+        s.slow = 40;
+        s.slow_amount = s.slow_amount.max(0.45);
+    });
+    sim.apply_control(me, |s| {
+        s.slow = s.slow.max(30);
+        s.slow_amount = s.slow_amount.max(0.25);
+    });
+    let st = *sim.world.get::<&Status>(e).unwrap();
+    assert!((st.speed_mul() - 0.55).abs() < 1e-4);
 }

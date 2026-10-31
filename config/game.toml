@@ -12,6 +12,8 @@ match_seconds = 900          # 常规时限：15 分钟
 # 饱和运算，不会溢出；base 设为 0 即"立即复活"。
 respawn_base_secs = 1
 respawn_multiplier = 2
+# 可选：单次复活时间上限（秒）。0 = 不设上限（当前规则）；设为 N 则复活时间 = min(上面的翻倍值, N)。
+respawn_max_secs = 0
 ai_fill_to = 4               # 每队人数不足时由 AI 魔法玩偶补足到该数量
 max_team_size = 4
 
@@ -109,9 +111,9 @@ skills = [
 [[heroes]]
 kind = "Ranger"
 name = "月影游侠"
-hp = 640.0
+hp = 670.0
 speed = 275.0
-attack_damage = 50.0
+attack_damage = 54.0
 attack_range = 330.0
 skills = [
   { key = "Q", name = "流星箭雨", effect = "damage", cooldown_seconds = 5.0, damage = 120.0, range = 560.0, radius = 120.0 },
@@ -187,12 +189,12 @@ skills = [
 [[heroes]]
 kind = "FrostWitch"
 name = "冰晶女巫"
-hp = 650.0
+hp = 690.0
 speed = 250.0
 attack_damage = 48.0
 attack_range = 300.0
 skills = [
-  { key = "Q", name = "冰锥", effect = "slow", cooldown_seconds = 5.0, damage = 115.0, range = 480.0, radius = 100.0, duration_seconds = 2.0, amount = 0.35 },
+  { key = "Q", name = "冰锥", effect = "slow", cooldown_seconds = 5.0, damage = 125.0, range = 480.0, radius = 100.0, duration_seconds = 2.0, amount = 0.35 },
   { key = "E", name = "寒冰禁锢", effect = "stun", cooldown_seconds = 11.0, damage = 70.0, range = 420.0, radius = 90.0, duration_seconds = 1.4 },
   { key = "R", name = "极寒风暴", effect = "cloud", cooldown_seconds = 18.0, damage = 75.0, range = 500.0, radius = 230.0, duration_seconds = 4.0, amount = 0.5 },
 ]
@@ -252,14 +254,14 @@ skills = [
 [[heroes]]
 kind = "Starshooter"
 name = "星辰射手"
-hp = 660.0
+hp = 700.0
 speed = 265.0
 attack_damage = 62.0
 attack_range = 360.0
 skills = [
-  { key = "Q", name = "星光穿刺", effect = "damage", cooldown_seconds = 4.5, damage = 135.0, range = 620.0, radius = 80.0 },
+  { key = "Q", name = "星光穿刺", effect = "slow", cooldown_seconds = 4.5, damage = 150.0, range = 620.0, radius = 80.0, duration_seconds = 1.5, amount = 0.25 },
   { key = "E", name = "星跃", effect = "dash", cooldown_seconds = 7.0, range = 260.0 },
-  { key = "R", name = "陨星坠落", effect = "damage", cooldown_seconds = 13.0, damage = 320.0, range = 760.0, radius = 150.0 },
+  { key = "R", name = "陨星坠落", effect = "damage", cooldown_seconds = 12.0, damage = 320.0, range = 760.0, radius = 150.0 },
 ]
 
 [[heroes]]
@@ -304,13 +306,13 @@ skills = [
 [[heroes]]
 kind = "FlameDancer"
 name = "烈焰舞姬"
-hp = 660.0
+hp = 690.0
 speed = 265.0
 attack_damage = 52.0
 attack_range = 280.0
 skills = [
   { key = "Q", name = "火焰扇", effect = "damage", cooldown_seconds = 4.5, damage = 125.0, range = 420.0, radius = 120.0 },
-  { key = "E", name = "炽焰火海", effect = "cloud", cooldown_seconds = 10.0, damage = 60.0, range = 450.0, radius = 160.0, duration_seconds = 3.0 },
+  { key = "E", name = "炽焰火海", effect = "cloud", cooldown_seconds = 10.0, damage = 70.0, range = 450.0, radius = 160.0, duration_seconds = 3.0 },
   { key = "R", name = "焚天之舞", effect = "nova", cooldown_seconds = 16.0, damage = 210.0, radius = 260.0 },
 ]
 
@@ -336,8 +338,8 @@ attack_damage = 56.0
 attack_range = 190.0
 skills = [
   { key = "Q", name = "裂爪撕咬", effect = "damage", cooldown_seconds = 4.5, damage = 120.0, range = 240.0, radius = 100.0 },
-  { key = "E", name = "狼灵召唤", effect = "summon", cooldown_seconds = 12.0, damage = 30.0, range = 200.0, duration_seconds = 10.0, count = 2, summon_hp = 300.0, summon_speed = 290.0, summon_range = 45.0 },
-  { key = "R", name = "群狼猎杀", effect = "summon", cooldown_seconds = 20.0, damage = 40.0, range = 250.0, duration_seconds = 12.0, count = 3, summon_hp = 380.0, summon_speed = 300.0, summon_range = 50.0 },
+  { key = "E", name = "狼灵召唤", effect = "summon", cooldown_seconds = 12.0, damage = 30.0, range = 200.0, duration_seconds = 10.0, count = 2, summon_hp = 260.0, summon_speed = 290.0, summon_range = 45.0 },
+  { key = "R", name = "群狼猎杀", effect = "summon", cooldown_seconds = 20.0, damage = 34.0, range = 250.0, duration_seconds = 12.0, count = 3, summon_hp = 320.0, summon_speed = 300.0, summon_range = 50.0 },
 ]
 
 [[heroes]]

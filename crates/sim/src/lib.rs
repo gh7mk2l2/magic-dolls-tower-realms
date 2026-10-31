@@ -1329,6 +1329,19 @@ impl Simulation {
             if status.shield_ticks == 0 {
                 status.shield = 0.0;
             }
+            // 到期即清零强度：叠加规则统一为“生效中取最强”，过期的强效果不会残留到下一次弱效果上。
+            if status.slow == 0 {
+                status.slow_amount = 0.0;
+            }
+            if status.haste == 0 {
+                status.haste_amount = 0.0;
+            }
+            if status.guard == 0 {
+                status.guard_amount = 0.0;
+            }
+            if status.stealth == 0 {
+                status.stealth_amount = 0.0;
+            }
             if status.regen > 0 {
                 status.regen -= 1;
                 if health.current > 0.0 {
@@ -1911,7 +1924,7 @@ impl Simulation {
                                 SkillEffect::Stun => status.stun = status.stun.max(ticks),
                                 SkillEffect::Slow => {
                                     status.slow = status.slow.max(ticks);
-                                    status.slow_amount = skill.amount;
+                                    status.slow_amount = status.slow_amount.max(skill.amount);
                                 }
                                 _ => {}
                             }
@@ -2267,7 +2280,7 @@ impl Simulation {
             SkillEffect::Fortify => {
                 self.apply_buff(id, |s, _| {
                     s.guard = s.guard.max(ticks);
-                    s.guard_amount = skill.amount.clamp(0.0, 0.9);
+                    s.guard_amount = s.guard_amount.max(skill.amount.clamp(0.0, 0.9));
                 });
                 if skill.radius > 0.0 {
                     let victims: Vec<u32> = self

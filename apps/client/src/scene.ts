@@ -308,7 +308,7 @@ export class BattleScene extends Phaser.Scene {
     const local = this.store.entities.get(this.deps.welcome.entity_id);
     if (local) {
       const ack = snapshot.acks.find(([player]) => player === this.deps.welcome.player_id)?.[1] ?? 0;
-      const disabled = local.respawn > 0 || (local.flags & FLAGS.STUNNED) !== 0;
+      const disabled = local.respawn > 0 || (local.flags & (FLAGS.STUNNED | FLAGS.TAUNTED)) !== 0;
       if (!this.localReady || disabled) {
         this.predictor.reset(local.x, local.y);
         this.localReady = true;
@@ -398,7 +398,7 @@ export class BattleScene extends Phaser.Scene {
       const frame = this.buildInput();
       this.deps.connection.sendInput(frame);
       if (local) {
-        const disabled = local.respawn > 0 || (local.flags & FLAGS.STUNNED) !== 0;
+        const disabled = local.respawn > 0 || (local.flags & (FLAGS.STUNNED | FLAGS.TAUNTED)) !== 0;
         this.predictor.push(disabled ? { ...frame, move_x: 0, move_y: 0 } : frame, this.localSpeed(local));
       }
     }

@@ -1161,3 +1161,199 @@ fn balance_report() {
         let _ = r.draws;
     }
 }
+
+#[test]
+fn stealth_positions_are_redacted_for_enemy_team_only() {
+    let mut sim = quiet();
+    let (mir, _) = sim
+        .add_player(1, "影", Some(Team::Red), HeroKind::Mirage)
+        .unwrap();
+    let (foe, _) = sim
+        .add_player(2, "敌", Some(Team::Blue), HeroKind::Arcanist)
+        .unwrap();
+    let start = Vec2 {
+        x: 1500.0,
+        y: 300.0,
+    };
+    place(&mut sim, mir, start);
+    place(
+        &mut sim,
+        foe,
+        Vec2 {
+            x: 2600.0,
+            y: 300.0,
+        },
+    );
+    let _ = sim.snapshot(true);
+    cast(&mut sim, 1, 1, 1, Vec2::default());
+    assert!(sim.entity_snapshot(mir).unwrap().flags & flags::STEALTH != 0);
+    // 隐身后向下走若干 tick
+    for seq in 2..20 {
+        sim.set_input(
+            1,
+            InputFrame {
+                seq,
+                move_y: 1.0,
+                ..InputFrame::default()
+            },
+        );
+        sim.step();
+        let snap = sim.snapshot(seq % 5 == 0);
+        let truth = sim.entity_snapshot(mir).unwrap();
+        assert!(truth.flags & flags::STEALTH != 0);
+        let blue = sim.redact_for(&snap, Team::Blue);
+        let red = sim.redact_for(&snap, Team::Red);
+        for e in blue.entities.iter().filter(|e| e.id == mir) {
+            assert!(e.flags & flags::STEALTH != 0);
+            assert!(
+                (e.y - start.y).abs() < 30.0,
+                "敌方只能看到进入隐身前的位置：{} vs 真实 {}",
+                e.y,
+                truth.y
+            );
+            assert_eq!((e.vx, e.vy), (0.0, 0.0));
+        }
+        if let Some(e) = red.entities.iter().find(|e| e.id == mir) {
+            assert_eq!(e.y, truth.y, "己方看到真实位置");
+        }
+        assert!(blue
+            .events
+            .iter()
+            .filter(|ev| ev.kind != EventKind::Skill)
+            .all(|ev| ev.source != mir && ev.target != mir));
+        let full = sim.redact_for(&sim.peek_full(), Team::Blue);
+        let e = full.entities.iter().find(|e| e.id == mir).unwrap();
+        assert!((e.y - start.y).abs() < 30.0);
+    }
+    assert!(sim.entity_snapshot(mir).unwrap().y > start.y + 60.0);
+    // 求救事件只发给己方
+    sim.set_input(
+        1,
+        InputFrame {
+            seq: 100,
+            help: true,
+            ..InputFrame::default()
+        },
+    );
+    sim.step();
+    let snap = sim.snapshot(false);
+    assert!(sim
+        .redact_for(&snap, Team::Red)
+        .events
+        .iter()
+        .any(|e| e.kind == EventKind::HelpRequest));
+    assert!(!sim
+        .redact_for(&snap, Team::Blue)
+        .events
+        .iter()
+        .any(|e| e.kind == EventKind::HelpRequest));
+}
+
+/// 随机输入模糊测试：全部 20 名玩偶 + 非法数值输入 + 中途加入/离开/断线/重连，
+/// 断言不 panic、所有坐标与血量有限且在合法范围内，并且同种子同输入完全可复现（服务端与 WASM 共用同一逻辑）。
+#[test]
+fn fuzz_inputs_joins_and_leaves_stay_finite_and_deterministic() {
+    fn run(seed: u64, ticks: u32) -> Vec<u8> {
+        let mut rng = DeterministicRng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+        let mut sim = Simulation::with_seed(GameConfig::default(), seed);
+        let mut players: Vec<u64> = Vec::new();
+        let mut next_player = 1u64;
+        let mut seqs: BTreeMap<u64, u32> = BTreeMap::new();
+        let mut digest = Vec::new();
+        let weird = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30, 0.0];
+        for t in 0..ticks {
+            let roll = rng.next_f32();
+            if roll < 0.004 && players.len() < 8 {
+                let kind = HeroKind::ALL[(rng.next_f32() * 20.0) as usize % 20];
+                let team = match (rng.next_f32() * 3.0) as u32 {
+                    0 => Some(Team::Red),
+                    1 => Some(Team::Blue),
+                    _ => None,
+                };
+                if sim.add_player(next_player, "模糊", team, kind).is_ok() {
+                    players.push(next_player);
+                }
+                next_player += 1;
+            } else if roll < 0.006 && !players.is_empty() {
+                let i = (rng.next_f32() * players.len() as f32) as usize % players.len();
+                let p = players.remove(i);
+                assert!(sim.remove_player(p));
+            } else if roll < 0.009 && !players.is_empty() {
+                let i = (rng.next_f32() * players.len() as f32) as usize % players.len();
+                sim.set_disconnected(players[i], rng.next_f32() < 0.5);
+            }
+            for &p in &players {
+                let seq = seqs.entry(p).or_insert(0);
+                *seq += 1;
+                let pick = |r: f32| -> f32 {
+                    if r < 0.05 {
+                        weird[(r * 120.0) as usize % weird.len()]
+                    } else {
+                        r * 3000.0
+                    }
+                };
+                let frame = InputFrame {
+                    seq: *seq,
+                    move_x: rng.next_f32() * 2.0 - 1.0,
+                    move_y: if rng.next_f32() < 0.02 {
+                        f32::NAN
+                    } else {
+                        rng.next_f32() * 2.0 - 1.0
+                    },
+                    aim_x: pick(rng.next_f32()),
+                    aim_y: pick(rng.next_f32()),
+                    attack: rng.next_f32() < 0.5,
+                    skills: (rng.next_f32() * 256.0) as u8,
+                    help: rng.next_f32() < 0.01,
+                    accept_help: if rng.next_f32() < 0.01 {
+                        (rng.next_f32() * 60.0) as u32
+                    } else {
+                        0
+                    },
+                };
+                sim.set_input(p, frame);
+            }
+            sim.step();
+            let snap = sim.snapshot(t % 20 == 0);
+            for team in [Team::Red, Team::Blue] {
+                let view = sim.redact_for(&snap, team);
+                assert_eq!(view.entities.len(), snap.entities.len());
+            }
+            for e in &snap.entities {
+                for v in [e.x, e.y, e.vx, e.vy, e.hp, e.max_hp, e.facing, e.speed_mul] {
+                    assert!(v.is_finite(), "seed {seed} tick {t}: {e:?}");
+                }
+                assert!(e.hp >= 0.0 && e.hp <= e.max_hp + 0.5, "{e:?}");
+                if e.kind != EntityKind::PoisonZone {
+                    assert!(e.x >= 0.0 && e.x <= sim.config.world.width, "{e:?}");
+                    assert!(e.y >= 0.0 && e.y <= sim.config.world.height, "{e:?}");
+                }
+            }
+            for ev in &snap.events {
+                assert!(ev.x.is_finite() && ev.y.is_finite() && ev.value.is_finite());
+                assert!(ev.tx.is_finite() && ev.ty.is_finite(), "{ev:?}");
+            }
+            digest.extend(shared::encode(&snap).unwrap());
+            if sim.is_over() {
+                break;
+            }
+        }
+        digest
+    }
+    for seed in 1..=3u64 {
+        let a = run(seed, 2400);
+        let b = run(seed, 2400);
+        assert!(a == b, "seed {seed} 同输入结果不一致");
+    }
+}
+
+#[test]
+fn config_rejects_nan_and_negative_skill_numbers() {
+    let bad = BUILTIN_CONFIG.replacen("damage = 145.0", "damage = nan", 1);
+    assert_ne!(bad, BUILTIN_CONFIG, "替换应命中");
+    assert!(GameConfig::from_toml(&bad).is_err());
+    let bad = BUILTIN_CONFIG.replacen("cooldown_seconds = 6.0", "cooldown_seconds = -6.0", 1);
+    assert_ne!(bad, BUILTIN_CONFIG);
+    assert!(GameConfig::from_toml(&bad).is_err());
+    assert!(GameConfig::from_toml(BUILTIN_CONFIG).is_ok());
+}

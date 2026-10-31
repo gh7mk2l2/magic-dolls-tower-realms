@@ -79,8 +79,9 @@ export class GameConnection {
     } else if ('Pong' in message) {
       this.onPong(Math.max(0, Math.round(performance.now() - message.Pong)));
     } else if ('Error' in message) {
-      // 加入前的错误（房间满、版本不符）是致命的，不再重连。
-      const fatal = !this.welcomed;
+      // 加入前的错误（房间满、版本不符）是致命的，不再重连；
+      // 角色被另一个页面接管时也停止重连，避免两个页面来回抢占。
+      const fatal = !this.welcomed || message.Error.includes('其他页面');
       if (fatal) this.manuallyClosed = true;
       this.onError(message.Error, fatal);
     }

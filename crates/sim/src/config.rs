@@ -326,7 +326,29 @@ impl GameConfig {
             if hero.skills.len() != 3 {
                 return fail("每个英雄必须恰好配置 3 个技能");
             }
+            for value in [hero.hp, hero.speed, hero.attack_damage, hero.attack_range]
+                .into_iter()
+                .flatten()
+            {
+                if !value.is_finite() || value < 0.0 {
+                    return fail("英雄数值必须是非负有限数");
+                }
+            }
             for skill in &hero.skills {
+                let numbers = [
+                    skill.cooldown_seconds,
+                    skill.damage,
+                    skill.range,
+                    skill.radius,
+                    skill.duration_seconds,
+                    skill.amount,
+                    skill.summon_hp,
+                    skill.summon_speed,
+                    skill.summon_range,
+                ];
+                if numbers.iter().any(|v| !v.is_finite() || *v < 0.0) {
+                    return fail("技能数值必须是非负有限数（不能为 nan/inf/负数）");
+                }
                 if skill.effect == SkillEffect::Summon
                     && (skill.count == 0 || skill.summon_hp <= 0.0)
                 {

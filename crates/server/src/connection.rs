@@ -149,7 +149,11 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
         match decode_client(&bytes) {
             Ok(ClientMessage::Input(frame)) => {
                 // 房间队列满时丢弃输入而不是阻塞（下一帧会带上最新状态）。
-                let _ = room.tx.try_send(RoomCommand::Input { player_id, frame });
+                let _ = room.tx.try_send(RoomCommand::Input {
+                    player_id,
+                    conn_id,
+                    frame,
+                });
             }
             Ok(ClientMessage::Resync) => {
                 let _ = room.tx.try_send(RoomCommand::Resync { player_id });
@@ -168,7 +172,7 @@ pub async fn handle_socket(socket: WebSocket, state: AppState) {
         }
     }
     let command = if left {
-        RoomCommand::Leave { player_id }
+        RoomCommand::Leave { player_id, conn_id }
     } else {
         RoomCommand::Disconnect { player_id, conn_id }
     };

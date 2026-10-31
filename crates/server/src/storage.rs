@@ -145,6 +145,9 @@ pub async fn spawn_storage(database_url: &str, redis_url: &str) -> StorageHandle
         postgres: pg.is_some(),
         redis: redis.is_some(),
     };
+    if pg.is_none() && redis.is_none() {
+        tracing::info!("存储：内存模式（未配置 PostgreSQL/Redis，战绩与排行榜重启后清空）");
+    }
     let (tx, mut rx) = mpsc::channel(256);
     let mut storage = Storage {
         pg,

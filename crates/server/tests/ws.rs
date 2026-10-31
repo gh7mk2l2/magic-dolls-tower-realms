@@ -141,3 +141,61 @@ async fn rejects_wrong_protocol_version_and_bad_room() {
     send(&mut ws, join("bad room!", None)).await;
     assert!(matches!(recv(&mut ws).await, ServerMessage::Error(_)));
 }
+
+#[tokio::test]
+async fn second_connection_takes_over_and_stale_leave_is_ignored() {
+    let url = start().await;
+    let (mut a, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    send(&mut a, join("takeover", None)).await;
+    let ServerMessage::Welcome(welcome) = recv(&mut a).await else {
+        panic!("首条消息应为 Welcome")
+    };
+    // 同一 token 在“另一个页面”接入，旧连接仍在线。
+    let (mut b, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    send(&mut b, join("takeover", Some(welcome.token.clone()))).await;
+    let ServerMessage::Welcome(again) = recv(&mut b).await else {
+        panic!("接管应收到 Welcome")
+    };
+    assert_eq!(again.entity_id, welcome.entity_id);
+    let mut notified = false;
+    for _ in 0..80 {
+        if let ServerMessage::Error(text) = recv(&mut a).await {
+            assert!(text.contains("其他页面"));
+            notified = true;
+            break;
+        }
+    }
+    assert!(notified, "旧连接应收到被接管通知");
+    // 旧连接的 Leave 不能移除已被接管的英雄。
+    send(&mut a, ClientMessage::Leave).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for seq in 1..=5 {
+        send(
+            &mut b,
+            ClientMessage::Input(InputFrame {
+                seq,
+                move_x: -1.0,
+                ..InputFrame::default()
+            }),
+        )
+        .await;
+    }
+    let mut acked = 0;
+    for _ in 0..80 {
+        if let ServerMessage::Snapshot(s) = recv(&mut b).await {
+            assert!(
+                s.entities
+                    .iter()
+                    .all(|e| e.id != welcome.entity_id || e.hp > 0.0),
+                "英雄仍在场"
+            );
+            if let Some((_, ack)) = s.acks.iter().find(|(p, _)| *p == welcome.player_id) {
+                acked = *ack;
+                if acked == 5 {
+                    break;
+                }
+            }
+        }
+    }
+    assert_eq!(acked, 5, "新连接保持控制权");
+}

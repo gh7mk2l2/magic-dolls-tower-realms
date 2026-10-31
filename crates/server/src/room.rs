@@ -9,7 +9,9 @@ use crate::registry::{RegistryHandle, RoomHandle};
 use crate::storage::StorageHandle;
 use bytes::Bytes;
 use serde::Serialize;
-use shared::{encode, InputFrame, JoinRequest, Phase, ServerMessage, Welcome, TICK_RATE};
+use shared::{
+    encode, InputFrame, JoinRequest, Phase, ServerMessage, Snapshot, Team, Welcome, TICK_RATE,
+};
 use sim::{GameConfig, Simulation};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,6 +42,7 @@ pub enum RoomCommand {
     },
     Input {
         player_id: u64,
+        conn_id: u64,
         frame: InputFrame,
     },
     Resync {
@@ -51,6 +54,7 @@ pub enum RoomCommand {
     },
     Leave {
         player_id: u64,
+        conn_id: u64,
     },
     Info {
         reply: oneshot::Sender<RoomInfo>,
@@ -85,7 +89,8 @@ struct Room {
     players: HashMap<u64, PlayerSlot>,
     tokens: HashMap<String, u64>,
     next_player_id: u64,
-    broadcast: broadcast::Sender<Bytes>,
+    /// 按队伍分发的快照广播 [红, 蓝]：敌方隐身单位的真实位置只进入己方频道。
+    broadcast: [broadcast::Sender<Bytes>; 2],
     ticks_since_full: u32,
     empty_since: Option<Instant>,
     ended_at: Option<Instant>,
@@ -95,7 +100,7 @@ struct Room {
 
 pub fn spawn_room(id: u64, name: String, ctx: RoomContext, registry: RegistryHandle) -> RoomHandle {
     let (tx, rx) = mpsc::channel(1024);
-    let (broadcast, _) = broadcast::channel(64);
+    let broadcast = [broadcast::channel(64).0, broadcast::channel(64).0];
     // 每局不同的随机种子（AI 选人、兵波站位），写进日志 header 以便回放复现
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -157,7 +162,15 @@ impl Room {
                 let result = self.join(request, conn_id, direct);
                 let _ = reply.send(result);
             }
-            RoomCommand::Input { player_id, frame } => {
+            RoomCommand::Input {
+                player_id,
+                conn_id,
+                frame,
+            } => {
+                // 只接受该玩家当前连接的输入（同一 token 在别处重连后，旧连接失去控制权）。
+                if !self.is_current(player_id, conn_id) {
+                    return;
+                }
                 let tick = self.sim.tick();
                 if self.sim.set_input(player_id, frame.clone()) {
                     self.log.input(tick, player_id, &frame);
@@ -180,7 +193,11 @@ impl Room {
                     }
                 }
             }
-            RoomCommand::Leave { player_id } => self.remove(player_id, "leave"),
+            RoomCommand::Leave { player_id, conn_id } => {
+                if self.is_current(player_id, conn_id) {
+                    self.remove(player_id, "leave");
+                }
+            }
             RoomCommand::Info { reply } => {
                 let _ = reply.send(self.info());
             }
@@ -211,6 +228,10 @@ impl Room {
             .filter(|id| self.players.contains_key(id));
         let (player_id, token) = if let Some(player_id) = reconnect {
             let slot = self.players.get_mut(&player_id).expect("checked");
+            if let Some(old) = slot.direct.take() {
+                // 同一 token 被另一个连接接管：通知旧连接（它随后不再能控制英雄）。
+                let _ = old.try_send(error_bytes("该角色已在其他页面重新连接"));
+            }
             slot.conn_id = Some(conn_id);
             slot.direct = Some(direct);
             slot.disconnected_at = None;
@@ -272,23 +293,38 @@ impl Room {
             encode(&ServerMessage::Welcome(Box::new(welcome))).map_err(|e| e.to_string())?,
         );
         let initial = Bytes::from(
-            encode(&ServerMessage::Snapshot(self.sim.peek_full())).map_err(|e| e.to_string())?,
+            encode(&ServerMessage::Snapshot(self.full_for(team))).map_err(|e| e.to_string())?,
         );
         Ok(JoinAccepted {
             player_id,
             welcome,
             initial,
-            snapshots: self.broadcast.subscribe(),
+            snapshots: self.broadcast[team_slot(team)].subscribe(),
         })
+    }
+
+    fn is_current(&self, player_id: u64, conn_id: u64) -> bool {
+        self.players
+            .get(&player_id)
+            .map(|slot| slot.conn_id == Some(conn_id))
+            .unwrap_or(false)
     }
 
     fn send_full(&mut self, player_id: u64) {
         let Some(direct) = self.players.get(&player_id).and_then(|s| s.direct.clone()) else {
             return;
         };
-        if let Ok(bytes) = encode(&ServerMessage::Snapshot(self.sim.peek_full())) {
+        let Some(team) = self.sim.player_team(player_id) else {
+            return;
+        };
+        if let Ok(bytes) = encode(&ServerMessage::Snapshot(self.full_for(team))) {
             let _ = direct.try_send(Bytes::from(bytes));
         }
+    }
+
+    /// 某队视角的全量快照（敌方隐身单位已裁剪）。
+    fn full_for(&self, team: Team) -> Snapshot {
+        self.sim.redact_for(&self.sim.peek_full(), team)
     }
 
     fn remove(&mut self, player_id: u64, reason: &str) {
@@ -354,12 +390,15 @@ impl Room {
         let snapshot = self.sim.snapshot(full);
         self.log.events(snapshot.tick, &snapshot.events);
         let sample = snapshot.tick.is_multiple_of(TICK_RATE * 5);
-        match encode(&ServerMessage::Snapshot(snapshot)) {
-            Ok(bytes) => {
-                // 没有订阅者时 send 返回 Err，可以忽略。
-                let _ = self.broadcast.send(Bytes::from(bytes));
+        for team in [Team::Red, Team::Blue] {
+            let view = self.sim.redact_for(&snapshot, team);
+            match encode(&ServerMessage::Snapshot(view)) {
+                Ok(bytes) => {
+                    // 没有订阅者时 send 返回 Err，可以忽略。
+                    let _ = self.broadcast[team_slot(team)].send(Bytes::from(bytes));
+                }
+                Err(error) => tracing::error!(%error, "快照编码失败"),
             }
-            Err(error) => tracing::error!(%error, "快照编码失败"),
         }
         if sample {
             self.log.stats(&self.sim.peek_full());
@@ -377,7 +416,10 @@ impl Room {
         self.log.summary(&summary);
         self.ctx.storage.record(self.name.clone(), summary.clone());
         if let Ok(bytes) = encode(&ServerMessage::MatchEnd(summary)) {
-            let _ = self.broadcast.send(Bytes::from(bytes));
+            let bytes = Bytes::from(bytes);
+            for channel in &self.broadcast {
+                let _ = channel.send(bytes.clone());
+            }
         }
         // 结束的房间不再接受新玩家；同名新房间会重新创建。
         self.registry.unlist(self.name.clone(), self.id);
@@ -403,6 +445,17 @@ impl Room {
             .into(),
             remaining: self.sim.remaining_seconds(),
         }
+    }
+}
+
+fn error_bytes(text: &str) -> Bytes {
+    Bytes::from(encode(&ServerMessage::Error(text.into())).unwrap_or_default())
+}
+
+fn team_slot(team: Team) -> usize {
+    match team {
+        Team::Red => 0,
+        Team::Blue => 1,
     }
 }
 

@@ -14,6 +14,8 @@ const LOCAL_PLAYER: u64 = 1;
 
 struct Instance {
     sim: Simulation,
+    /// 本地玩家队伍：快照与联网一样按队伍裁剪（敌方隐身单位不下发真实位置）。
+    team: shared::Team,
     out: Vec<u8>,
     ticks_since_full: u32,
 }
@@ -109,6 +111,7 @@ pub extern "C" fn mdtr_send(ptr: *const u8, len: usize) {
                         reply(&ServerMessage::Welcome(Box::new(welcome)));
                         *slot = Some(Instance {
                             sim,
+                            team,
                             out: Vec::new(),
                             ticks_since_full: u32::MAX,
                         });
@@ -156,6 +159,7 @@ pub extern "C" fn mdtr_step() -> u32 {
             instance.ticks_since_full + 1
         };
         let snapshot = instance.sim.snapshot(full);
+        let snapshot = instance.sim.redact_for(&snapshot, instance.team);
         instance.out = encode(&ServerMessage::Snapshot(snapshot)).unwrap_or_default();
         let ended = !was_over && instance.sim.is_over();
         if ended {
@@ -176,10 +180,73 @@ pub extern "C" fn mdtr_step() -> u32 {
     })
 }
 
+/// 跨目标一致性探针：固定种子与脚本输入跑 `ticks` 帧，返回所有快照字节的 FNV-1a 哈希。
+/// 原生（服务端同款代码）与浏览器 WASM 运行结果必须相同，见 `apps/client/test/wasm-sim.test.ts`。
+#[no_mangle]
+pub extern "C" fn mdtr_selftest(ticks: u32) -> u32 {
+    let mut sim = Simulation::with_seed(GameConfig::default(), 42);
+    let _ = sim.add_player(
+        LOCAL_PLAYER,
+        "探针",
+        Some(shared::Team::Red),
+        shared::HeroKind::Stormcaller,
+    );
+    let mut hash: u32 = 0x811c_9dc5;
+    for t in 1..=ticks {
+        let phase = (t / 40) as f32;
+        sim.set_input(
+            LOCAL_PLAYER,
+            shared::InputFrame {
+                seq: t,
+                move_x: (phase * 0.7).cos(),
+                move_y: (phase * 1.3).sin(),
+                aim_x: 1500.0 + (t % 300) as f32,
+                aim_y: 300.0 + (t % 170) as f32,
+                attack: t % 3 != 0,
+                skills: if t % 25 == 0 { 1 << ((t / 25) % 3) } else { 0 },
+                help: false,
+                accept_help: 0,
+            },
+        );
+        sim.step();
+        let snapshot = sim.snapshot(t % TICK_RATE == 0);
+        for byte in encode(&snapshot).unwrap_or_default() {
+            hash ^= u32::from(byte);
+            hash = hash.wrapping_mul(0x0100_0193);
+        }
+        if sim.is_over() {
+            break;
+        }
+    }
+    hash
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use shared::{HeroKind, JoinRequest};
+
+    #[test]
+    fn selftest_hash_is_stable() {
+        let a = mdtr_selftest(600);
+        assert_eq!(a, mdtr_selftest(600));
+        // 写出原生结果，供客户端测试与 WASM 结果比对（同一份源码在两个目标上必须逐字节一致）。
+        let hash = mdtr_selftest(SELFTEST_TICKS);
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../apps/client/test/native-selftest.txt"
+        );
+        let _ = std::fs::write(path, format!("{SELFTEST_TICKS} {hash}\n"));
+    }
+
+    const SELFTEST_TICKS: u32 = 6000;
+    #[test]
+    fn selftest_covers_a_long_match() {
+        assert_ne!(
+            mdtr_selftest(SELFTEST_TICKS),
+            mdtr_selftest(SELFTEST_TICKS - 1)
+        );
+    }
 
     fn send(message: &ClientMessage) -> Vec<u8> {
         let bytes = encode(message).unwrap();

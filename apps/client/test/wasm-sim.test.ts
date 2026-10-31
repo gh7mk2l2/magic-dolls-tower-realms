@@ -73,4 +73,14 @@ describe.skipIf(!hasWasm)('Rust 模拟（WASM）', () => {
       expect(kinds.filter((k) => k === `${team}-Base`)).toHaveLength(1);
     }
   });
+
+  it('与原生（服务端）模拟逐字节一致', async () => {
+    const nativePath = new URL('./native-selftest.txt', import.meta.url);
+    if (!existsSync(nativePath)) return; // 先运行 cargo test -p sim-wasm 生成
+    const [ticks, hash] = readFileSync(nativePath, 'utf8').trim().split(/\s+/).map(Number);
+    const { instance } = await WebAssembly.instantiate(readFileSync(wasmPath), {});
+    const selftest = (instance.exports as { mdtr_selftest?: (n: number) => number }).mdtr_selftest;
+    expect(selftest).toBeTypeOf('function');
+    expect(selftest!(ticks) >>> 0).toBe(hash);
+  });
 });

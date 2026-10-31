@@ -227,6 +227,8 @@ pub struct Simulation {
     /// 每队本局累计阵亡次数 [红, 蓝]，决定复活时间（1、2、4、8… 秒）。
     team_deaths: [u32; 2],
     clouds: Vec<Cloud>,
+    /// 隐身实体对敌方显示的“最后可见位置”（进入隐身前最后一次下发的坐标）。
+    stealth_anchor: BTreeMap<u32, Vec2>,
 }
 
 /// 默认随机种子（`Simulation::new`）。
@@ -280,6 +282,7 @@ impl Simulation {
             help_ready: BTreeMap::new(),
             team_deaths: [0, 0],
             clouds: Vec::new(),
+            stealth_anchor: BTreeMap::new(),
         };
         for team in [Team::Red, Team::Blue] {
             sim.spawn_structures(team);
@@ -722,6 +725,21 @@ impl Simulation {
                     .get(&id)
                     .map(|previous| !nearly_equal(previous, &snapshot))
                     .unwrap_or(true);
+                if snapshot.flags & flags::STEALTH != 0 {
+                    // 记录进入隐身前敌方最后看到的位置，用于按队伍裁剪快照。
+                    let seen = self
+                        .last_sent
+                        .get(&id)
+                        .filter(|p| p.flags & flags::STEALTH == 0)
+                        .map(|p| Vec2 { x: p.x, y: p.y })
+                        .unwrap_or(Vec2 {
+                            x: snapshot.x,
+                            y: snapshot.y,
+                        });
+                    self.stealth_anchor.entry(id).or_insert(seen);
+                } else {
+                    self.stealth_anchor.remove(&id);
+                }
                 if full || changed {
                     entities.push(snapshot.clone());
                     current.insert(id, snapshot);
@@ -732,6 +750,9 @@ impl Simulation {
         }
         self.last_sent = current;
         let removed = std::mem::take(&mut self.removed);
+        for id in &removed {
+            self.stealth_anchor.remove(id);
+        }
         let acks = self
             .players
             .keys()
@@ -787,6 +808,61 @@ impl Simulation {
             blue_score: self.blue_score,
             team_names: self.team_names.to_vec(),
             wave: self.wave,
+        }
+    }
+
+    /// 按观察方裁剪快照（服务端防透视）：
+    /// - 敌方隐身实体的坐标替换为进入隐身前的最后可见位置，速度/攻击状态清零，
+    ///   真实位置不会出现在该队收到的任何字节里；
+    /// - 以隐身敌方为目标的命中/毒伤事件、以及敌方的求救/应答事件（只属于对方队伍）被丢弃。
+    ///
+    /// 必须使用本模拟刚生成的快照（`snapshot`/`peek_full`）调用，隐身集合取自当前状态。
+    pub fn redact_for(&self, snapshot: &Snapshot, viewer: Team) -> Snapshot {
+        let hidden: std::collections::BTreeSet<u32> = self
+            .world
+            .query::<(&NetworkId, &Allegiance, &Status)>()
+            .iter()
+            .filter(|(_, (_, team, status))| team.0 != viewer && status.stealth > 0)
+            .map(|(_, (id, _, _))| id.0)
+            .collect();
+        let entities = snapshot
+            .entities
+            .iter()
+            .map(|e| {
+                if e.team == viewer || (e.flags & flags::STEALTH == 0 && !hidden.contains(&e.id)) {
+                    return e.clone();
+                }
+                let anchor = self
+                    .stealth_anchor
+                    .get(&e.id)
+                    .copied()
+                    .unwrap_or(Vec2 { x: e.x, y: e.y });
+                EntitySnapshot {
+                    x: anchor.x,
+                    y: anchor.y,
+                    vx: 0.0,
+                    vy: 0.0,
+                    attacking: false,
+                    flags: e.flags | flags::STEALTH,
+                    ..e.clone()
+                }
+            })
+            .collect();
+        let events = snapshot
+            .events
+            .iter()
+            .filter(|ev| match ev.kind {
+                EventKind::HelpRequest | EventKind::HelpAccepted => ev.team == Some(viewer),
+                // 区域脉冲是区域中心；技能事件只在施法瞬间产生（施放隐身本身的位置即最后可见位置）。
+                EventKind::Zone | EventKind::Skill => !hidden.contains(&ev.target),
+                _ => !hidden.contains(&ev.target) && !hidden.contains(&ev.source),
+            })
+            .cloned()
+            .collect();
+        Snapshot {
+            entities,
+            events,
+            ..snapshot.clone()
         }
     }
 
@@ -2184,7 +2260,7 @@ impl Simulation {
                 for ally in allies {
                     self.apply_buff(ally, |s, _| {
                         s.regen = ticks;
-                        s.regen_per_tick = skill.amount / ticks as f32;
+                        s.regen_per_tick = skill.amount / ticks.max(1) as f32;
                     });
                 }
             }
@@ -2411,9 +2487,15 @@ impl Simulation {
                     }
                     if !moved {
                         if let Some(owner) = summon_owner {
-                            // 召唤物无目标时跟随主人
+                            // 召唤物无目标时跟随主人；主人隐身时原地待命，避免暴露其位置
+                            let owner_hidden = metas
+                                .iter()
+                                .find(|m| m.id == owner)
+                                .map(|m| m.stealth)
+                                .unwrap_or(false);
                             let follow = self
                                 .alive_position(owner)
+                                .filter(|_| !owner_hidden)
                                 .filter(|p| distance(*p, position) > 140.0);
                             match follow {
                                 Some(p) => {
@@ -2767,6 +2849,10 @@ impl Simulation {
                     hero.stats.deaths += 1;
                     hero.poison_ticks = 0;
                 }
+                // 阵亡清空所有状态（隐身/护盾/嘲讽等不跨越死亡）。
+                if let Ok(mut status) = self.world.get::<&mut Status>(entity) {
+                    *status = Status::default();
+                }
                 let killer = source.entity.and_then(|s| self.entities.get(&s).copied());
                 if let Some(killer) = killer {
                     if let Ok(mut hero) = self.world.get::<&mut HeroState>(killer) {
@@ -3061,7 +3147,7 @@ impl Simulation {
             vx: round1(velocity.x),
             vy: round1(velocity.y),
             hp: health.current.ceil(),
-            max_hp: health.max,
+            max_hp: health.max.ceil(),
             radius,
             hero: hero.as_ref().map(|h| h.kind),
             owner: hero.as_ref().and_then(|h| h.owner),
